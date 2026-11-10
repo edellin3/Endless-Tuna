@@ -1,0 +1,10 @@
+CREATE VIRTUAL TABLE edition_fts USING fts5(edition_id UNINDEXED,name,year,description,tracks);
+INSERT INTO edition_fts SELECT e.id,s.name,CAST(e.year AS TEXT),e.description,COALESCE((SELECT group_concat(name,' ') FROM tracks WHERE edition_id=e.id),'') FROM editions e JOIN series s ON s.id=e.series_id;
+CREATE TRIGGER edition_search_insert AFTER INSERT ON editions BEGIN INSERT INTO edition_fts SELECT new.id,s.name,CAST(new.year AS TEXT),new.description,'' FROM series s WHERE s.id=new.series_id; END;
+CREATE TRIGGER edition_search_update AFTER UPDATE OF series_id,year,description ON editions BEGIN DELETE FROM edition_fts WHERE edition_id=new.id; INSERT INTO edition_fts SELECT new.id,s.name,CAST(new.year AS TEXT),new.description,COALESCE((SELECT group_concat(name,' ') FROM tracks WHERE edition_id=new.id),'') FROM series s WHERE s.id=new.series_id; END;
+CREATE TRIGGER edition_search_delete AFTER DELETE ON editions BEGIN DELETE FROM edition_fts WHERE edition_id=old.id; END;
+CREATE TRIGGER series_search_update AFTER UPDATE OF name ON series BEGIN UPDATE edition_fts SET name=new.name WHERE edition_id IN (SELECT id FROM editions WHERE series_id=new.id); END;
+CREATE TRIGGER track_search_insert AFTER INSERT ON tracks BEGIN UPDATE edition_fts SET tracks=COALESCE((SELECT group_concat(name,' ') FROM tracks WHERE edition_id=new.edition_id),'') WHERE edition_id=new.edition_id; END;
+CREATE TRIGGER track_search_update AFTER UPDATE ON tracks BEGIN UPDATE edition_fts SET tracks=COALESCE((SELECT group_concat(name,' ') FROM tracks WHERE edition_id=old.edition_id),'') WHERE edition_id=old.edition_id; UPDATE edition_fts SET tracks=COALESCE((SELECT group_concat(name,' ') FROM tracks WHERE edition_id=new.edition_id),'') WHERE edition_id=new.edition_id; END;
+CREATE TRIGGER track_search_delete AFTER DELETE ON tracks BEGIN UPDATE edition_fts SET tracks=COALESCE((SELECT group_concat(name,' ') FROM tracks WHERE edition_id=old.edition_id),'') WHERE edition_id=old.edition_id; END;
+CREATE TABLE export_files(id TEXT PRIMARY KEY,name TEXT NOT NULL,kind TEXT NOT NULL,size_bytes INTEGER NOT NULL,paper_count INTEGER NOT NULL,created REAL NOT NULL,expires REAL NOT NULL);

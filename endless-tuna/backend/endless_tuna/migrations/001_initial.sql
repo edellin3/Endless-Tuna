@@ -1,0 +1,18 @@
+CREATE TABLE series(id TEXT PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE editions(id TEXT PRIMARY KEY, series_id TEXT NOT NULL REFERENCES series(id), year INTEGER NOT NULL, description TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'queued', source_url TEXT NOT NULL);
+CREATE TABLE tracks(id TEXT PRIMARY KEY, edition_id TEXT NOT NULL REFERENCES editions(id), name TEXT NOT NULL);
+CREATE TABLE papers(id TEXT PRIMARY KEY, edition_id TEXT NOT NULL REFERENCES editions(id), track_id TEXT REFERENCES tracks(id), title TEXT NOT NULL, abstract TEXT NOT NULL, review_status TEXT NOT NULL DEFAULT 'uncertain');
+CREATE TABLE authors(id TEXT PRIMARY KEY, name TEXT NOT NULL, biography TEXT NOT NULL DEFAULT '');
+CREATE TABLE organizations(id TEXT PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE authorship(paper_id TEXT REFERENCES papers(id), author_id TEXT REFERENCES authors(id), position INTEGER NOT NULL, PRIMARY KEY(paper_id,author_id), UNIQUE(paper_id,position));
+CREATE TABLE affiliations(paper_id TEXT, author_id TEXT, organization_id TEXT REFERENCES organizations(id), PRIMARY KEY(paper_id,author_id,organization_id), FOREIGN KEY(paper_id,author_id) REFERENCES authorship(paper_id,author_id));
+CREATE TABLE sources(id TEXT PRIMARY KEY, edition_id TEXT REFERENCES editions(id), url TEXT NOT NULL, label TEXT NOT NULL);
+CREATE TABLE evidence(id TEXT PRIMARY KEY, paper_id TEXT REFERENCES papers(id), source_id TEXT REFERENCES sources(id), field TEXT NOT NULL, quote TEXT NOT NULL);
+CREATE TABLE downloads(id TEXT PRIMARY KEY, paper_id TEXT REFERENCES papers(id), status TEXT NOT NULL, path TEXT, source_url TEXT, error TEXT);
+CREATE TABLE jobs(id TEXT PRIMARY KEY, edition_id TEXT NOT NULL REFERENCES editions(id), status TEXT NOT NULL, progress INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, updated REAL NOT NULL, lease_until REAL, cursor INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE review_history(id TEXT PRIMARY KEY, paper_id TEXT REFERENCES papers(id), action TEXT NOT NULL, old_title TEXT NOT NULL, new_title TEXT NOT NULL, note TEXT NOT NULL, created REAL NOT NULL);
+CREATE VIRTUAL TABLE papers_fts USING fts5(title, abstract, content='papers', content_rowid='rowid');
+CREATE TRIGGER papers_ai AFTER INSERT ON papers BEGIN INSERT INTO papers_fts(rowid,title,abstract) VALUES(new.rowid,new.title,new.abstract); END;
+CREATE TRIGGER papers_ad AFTER DELETE ON papers BEGIN INSERT INTO papers_fts(papers_fts,rowid,title,abstract) VALUES('delete',old.rowid,old.title,old.abstract); END;
+CREATE TRIGGER papers_au AFTER UPDATE ON papers BEGIN INSERT INTO papers_fts(papers_fts,rowid,title,abstract) VALUES('delete',old.rowid,old.title,old.abstract); INSERT INTO papers_fts(rowid,title,abstract) VALUES(new.rowid,new.title,new.abstract); END;
+CREATE INDEX jobs_queue ON jobs(status,updated);

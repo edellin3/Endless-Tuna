@@ -1,0 +1,36 @@
+name: endless-tuna
+x-common: &common
+  image: endless-tuna:local
+  build: .
+  init: true
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    TUNA_DATA_DIR: /data
+  volumes:
+    - database:/data
+    - demo-pdfs:/data/demo-pdfs
+    - real-pdfs:/data/real-pdfs
+  stop_grace_period: 120s
+services:
+  app:
+    <<: *common
+    ports:
+      - "127.0.0.1:${TUNA_API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
+  worker:
+    <<: *common
+    command: ["python", "-m", "endless_tuna.worker"]
+    depends_on:
+      app:
+        condition: service_healthy
+volumes:
+  database:
+  demo-pdfs:
+  real-pdfs:

@@ -1,0 +1,51 @@
+# Python environment and generated files
+.venv/
+.venv-las/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Local documents, databases, and case data
+/data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Local credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Previous versions and update backups
+/Scientist-on-Call-Version-2/
+/Scientist-on-Call-Version-3/
+/update-backups/
+
+# Demo materials pending review
+/demo/
+
+# endless tuna runtime, build output, and dependencies
+node_modules/
+dist/
+.pytest_cache/
+*.egg-info/
+endless-tuna/var/
+*.pdf
+*.log
+exports/
+*.tsbuildinfo
+# Generated export artifacts under custom TUNA_DATA_DIR locations
+*-exports/
+backups/
+*.xlsx
+*.zip
+*.tar.gz
+*.tgz
+*.dump
+playwright-report/
+test-results/

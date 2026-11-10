@@ -1,0 +1,3 @@
+CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE pdf_text(paper_id TEXT PRIMARY KEY REFERENCES papers(id), text TEXT NOT NULL, pages INTEGER NOT NULL);
+CREATE TABLE job_payloads(job_id TEXT PRIMARY KEY REFERENCES jobs(id), records TEXT NOT NULL);
