@@ -21,20 +21,12 @@ __pycache__/
 *.pem
 *.key
 
-# Previous versions and update backups
-/Scientist-on-Call-Version-2/
-/Scientist-on-Call-Version-3/
-/update-backups/
-
-# Demo materials pending review
-/demo/
-
 # endless tuna runtime, build output, and dependencies
 node_modules/
 dist/
 .pytest_cache/
 *.egg-info/
-endless-tuna/var/
+var/
 *.pdf
 *.log
 exports/

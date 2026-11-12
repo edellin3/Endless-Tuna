@@ -32,9 +32,10 @@ def findings(path, raw):
         # These tests deliberately supply invalid credential URLs to exercise rejection.
         # Provider-key/private-key/literal-secret checks still apply to every test file.
         if rule == 'credential-bearing URL' and path in {
-            'endless-tuna/backend/tests/test_collection.py',
-            'endless-tuna/backend/tests/test_pipeline.py',
-            'endless-tuna/backend/tests/test_las.py',
+            'backend/tests/test_collection.py',
+            'backend/tests/test_pipeline.py',
+            'backend/tests/test_las.py',
+            'backend/tests/test_intake.py',
         }: continue
         for match in pattern.finditer(raw):
             if rule == 'literal secret assignment' and safe_placeholder(match[1]): continue
@@ -55,7 +56,7 @@ def main():
         if file.is_file():
             failures.extend((path, 'working tree', rule) for rule in findings(path, file.read_bytes()))
         if path in tracked:
-            raw = git('show', ':' + path)
+            raw = git('show', ':./' + path)
             failures.extend((path, 'index', rule) for rule in findings(path, raw))
     for path, location, rule in failures:
         print(f'CHECK: {path} ({location}): {rule}')

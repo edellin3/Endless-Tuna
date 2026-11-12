@@ -1,0 +1,16 @@
+.git
+.env
+.env.*
+.venv
+var
+frontend/node_modules
+frontend/dist
+**/__pycache__
+**/.pytest_cache
+**/*.tsbuildinfo
+**/*.pdf
+**/*.sqlite*
+**/*.db*
+**/*.log
+**/*-exports
+docs

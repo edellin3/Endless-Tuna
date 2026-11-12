@@ -1,0 +1,24 @@
+{
+  "folders": [
+    {
+      "name": "endless-tuna",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "files.exclude": {
+      "**/__pycache__": true,
+      "**/.pytest_cache": true,
+      "**/*.tsbuildinfo": true,
+      "**/.venv": true,
+      "**/node_modules": true,
+      "**/dist": true
+    },
+    "search.exclude": {
+      "**/.venv": true,
+      "**/node_modules": true,
+      "**/dist": true,
+      "**/var": true
+    }
+  }
+}
