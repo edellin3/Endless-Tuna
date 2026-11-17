@@ -201,6 +201,37 @@ try {
     assert.equal(foreign.status(),403);
     return "Real browser/Vite/API round trip accepted; unsafe source rejected without fetching. Foreign-origin POST still blocked.";
   });
+  await check("Conference authors tab, extraction, search and CSV through Vite", async () => {
+    await page.goto(base + "/#/?collection=demo");
+    await page.locator(".conference-card").first().waitFor();
+    await page.goto(base + "/#/conferences/harbor?collection=demo");
+    await page.getByRole("button", {name: "Authors & institutions", exact: true}).click();
+    await page.getByRole("table").waitFor();
+    await page.getByRole("button", {name: "Extract downloaded papers", exact: true}).click();
+    await page.getByRole("status").filter({hasText: "Extraction finished"}).waitFor();
+    await page.getByLabel("Search authors, institutions or papers").fill("Mira");
+    await until(async () => await page.locator(".conference-authors tbody tr").count() === 2, "Author search did not filter paper records");
+    assert.ok(page.url().includes("author_q=Mira"));
+    const waiting = page.waitForEvent("download");
+    await page.getByRole("button", {name: "Export matching CSV", exact: true}).click();
+    const download = await waiting;
+    const text = fs.readFileSync(await download.path(), "utf8");
+    assert.ok(text.includes("author_position,institution,status"));
+    assert.ok(text.includes("Mira Chen"));
+    assert.ok(!text.includes("Alex Rivera"));
+    const pdfWaiting = page.waitForEvent("download");
+    await page.getByRole("button", {name: "Export matching PDF", exact: true}).click();
+    const pdf = await pdfWaiting;
+    assert.equal(fs.readFileSync(await pdf.path()).subarray(0,5).toString(), "%PDF-");
+    assert.equal(pdf.suggestedFilename(), "conference-authors.pdf");
+    const axe = await new AxeBuilder({page}).withTags(["wcag2a", "wcag2aa"]).analyze();
+    assert.deepEqual(axe.violations.map(v => v.id), []);
+    await page.getByRole("button", {name: "Papers", exact: true}).click();
+    assert.ok(page.url().includes("tab=papers"));
+    await page.goBack();
+    await page.getByRole("heading", {name: "Authors & institutions", exact: true}).waitFor();
+    return "Search and tab survive history; CSV and PDF download filtered author-paper rows; no LAS; axe passes.";
+  });
   let savedSearch;
   await check("1. Clearly labeled demo and operation without LAS", async () => {
     await page.goto(base + "/#/?collection=demo");

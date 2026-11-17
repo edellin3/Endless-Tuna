@@ -1,5 +1,22 @@
 # Local lab preparation results
 
+## Authors and institutions exports — 2026-11-17
+
+Added the conference **Authors & institutions** view with URL-backed search,
+evidence status filters, missing-coverage counts and local extraction of earlier
+downloads. Both matching and whole-conference exports are available as CSV and
+searchable PDF reports. Evidence and review statuses are preserved; a full PDF
+download count is not a claim of full affiliation extraction.
+
+Verified locally with 201 passing offline backend tests, a successful frontend
+production build, and the full isolated Playwright acceptance workflow through
+the actual Vite proxy. The new browser check downloads both formats and passes
+axe accessibility checks. Backend checks cover collection isolation, literal
+search, conference memberships, multiple institutions, missing rosters,
+spreadsheet formula protection, bounded extraction batches, Unicode PDF text and
+long evidence spanning pages. Dependency consistency (`pip check`) passes.
+These are fictional/mocked checks; no new live collection or LAS checks were run.
+
 Verified 2026-11-10 on Ubuntu, Python 3.12 and Node 24. The repository was prepared locally: no remote creation, staging/commit, push, public deployment or license selection was performed. The existing Option 3 dashboard, stored collections and LAS-only model path were preserved.
 
 ## Changes

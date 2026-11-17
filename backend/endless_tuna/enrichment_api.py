@@ -60,6 +60,9 @@ def review_assertion(con,ident,body):
 
 
 def register_enrichment(app,collection,get):
+    from .conference_authors import register_conference_authors
+    register_conference_authors(app,collection,get)
+
     @app.post('/api/papers/{id}/enrich')
     def enrich(id:str,body:EnrichRequest,c=Depends(collection)):
         try:return enrich_paper(c,id,body.use_las)

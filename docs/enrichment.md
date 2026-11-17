@@ -73,3 +73,39 @@ All API operations honor the isolated `X-Collection: demo|real` databases. Crede
 Offline tests inject mocked LAS transports and prohibit live HTTP. They cover multiple affiliations, numeric/symbol markers, vertical blocks, identical names, missing source evidence, country inference rejection, invalid JSON/extra unsupported fields, verbatim excerpts, current-versus-paper time, failure retries, immutable corrections, manual Scholar corroboration, ORCID checksums, same-name rejection, confirmed identity links and merge undo with all paper associations intact. Browser checks exercise filters, assertion evidence and review controls separately.
 
 The existing ten real NeurIPS PDFs were processed locally with **zero model requests**. A deterministic pass produced 15 unverified evidence-backed assertions: four papers had extracted mappings, one needed review, and five lacked an unambiguous mapping. They were not automatically marked verified; country/current affiliation/Scholar fields were not filled with guesses. Runtime evidence is in ignored `var/enrichment-result.json`. Live LAS extraction was not tested; it requires local credentials and an explicit user action.
+
+## Conference authors and institutions
+
+Open a conference and choose **Authors & institutions**. Search by author,
+institution or paper title and filter by evidence status. The table preserves
+author order and identity IDs, with a row for each paper–author–institution
+assertion. Authors with no supported institution remain visible as missing;
+papers without an author roster are counted separately. Source metadata and PDF
+evidence retain their extraction method, excerpt, URL and page where available.
+Extracted institutions remain unverified until analyst review. Historical legacy
+affiliations without retained evidence are not promoted into extracted results.
+
+New collection downloads already run deterministic affiliation extraction.
+**Extract downloaded papers** processes earlier downloads in batches of ten,
+retaining results between batches. Stop or leave the tab to stop requesting new
+batches; the current batch can finish. Click extraction again to recheck all
+available downloads without duplicating assertions or resetting reviews.
+This action uses local parsed text, without model calls. Complex layouts,
+image-only PDFs and missing rosters may require review or the existing explicit
+paper-level LAS extraction action; complete downloads do not establish complete
+institution coverage.
+
+**Export matching CSV** includes all matching rows across pages; **Export all
+CSV** ignores table filters. CSV contains collection, conference/year, paper and
+author IDs, author position, institution, evidence status/method, source URL,
+PDF page, excerpt and extraction status. Missing institutions are blank.
+Exports stream from a consistent read snapshot and protect spreadsheet cells
+from formula execution. Search, evidence filter, tab and pagination persist in
+the URL, and every API operation remains collection-scoped.
+
+**Export matching PDF** and **Export all PDF** use the same record selection as
+CSV and include all matching pages. The PDF is a searchable, paginated author
+and institution report with paper links as source text, identity IDs, statuses,
+excerpts and page references. It labels fictional demo data and missing evidence.
+Long evidence wraps across pages; larger reports spool to temporary disk storage.
+These reports are separate from the existing original-paper PDF ZIP export.

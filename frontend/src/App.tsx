@@ -2,6 +2,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   type FormEvent,
   type ReactNode,
@@ -756,6 +757,7 @@ function Conference() {
     ...blank,
     page: "1",
     page_size: "25",
+    tab: "papers",
   });
   const q = search.q,
     pdf = search.pdf,
@@ -783,6 +785,11 @@ function Conference() {
             </div>
           </div>
           <CollectionWorkflow editionId={d.id} baseline={d.coverage} initialStatus={d.status} sourceURL={d.source_url} conferenceName={d.name} conferenceYear={d.year} />
+          <div className="toolbar conference-tabs" role="navigation" aria-label="Conference views">
+            <button aria-current={search.tab !== "authors" ? "page" : undefined} onClick={() => setSearch({tab: "papers"})}>Papers</button>
+            <button aria-current={search.tab === "authors" ? "page" : undefined} onClick={() => setSearch({tab: "authors"})}>Authors & institutions</button>
+          </div>
+          {search.tab === "authors" ? <ConferenceAuthors key={`${d.id}-${new URLSearchParams(query).get("collection")}`} editionId={d.id} /> : <>
           <div className="toolbar">
             <input
               aria-label="Filter conference papers"
@@ -859,6 +866,7 @@ function Conference() {
             onSize={(n) => setSearch({ page_size: n, page: "1" })}
           />
           <ExportPanel editionId={d.id} filters={search} />
+          </>}
           <details className="panel detailed-coverage"><summary>Detailed collection coverage</summary>
           <div className="metrics coverage-metrics">
             {[
@@ -907,6 +915,75 @@ function Conference() {
       )}
     </State>
   );
+}
+function ConferenceAuthors({ editionId }: { editionId: string }) {
+  const { api, download, collection } = useApp();
+  const [dataVersion, setDataVersion] = useState(0);
+  const [filters, setFilters] = useSearchURL({author_q: "", author_status: "", page: "1", page_size: "25"});
+  const params = queryParams({q: filters.author_q, status: filters.author_status, page: filters.page, page_size: filters.page_size});
+  const result = useData(`/conferences/${editionId}/authors?${params}&revision=${dataVersion}`);
+  const [running, setRunning] = useState(false);
+  const [message, setMessage] = useState("");
+  const [failure, setFailure] = useState("");
+  const generation = useRef(0);
+  useEffect(() => () => { generation.current++; }, [editionId, collection]);
+  async function extract() {
+    const token = ++generation.current;
+    setRunning(true); setFailure(""); setMessage("Extracting downloaded papers…");
+    let after = "", count = 0, failed = 0;
+    try {
+      do {
+        const batch = await api(`/conferences/${editionId}/authors/extract?after=${encodeURIComponent(after)}`, {});
+        if (generation.current !== token) return;
+        count += batch.results.length;
+        failed += batch.results.filter((r: Row) => r.status === "failed").length;
+        setMessage(`Processed ${count} downloaded papers${failed ? ` · ${failed} need attention` : ""}.`);
+        after = batch.next_after || "";
+        setDataVersion(v => v + 1);
+      } while (after);
+      setMessage(`Extraction finished for ${count} downloaded papers${failed ? ` · ${failed} need attention` : ""}. Missing affiliations need paper review.`);
+    } catch (e: any) {
+      if (generation.current === token) setFailure(e.message);
+    } finally {
+      if (generation.current === token) { setRunning(false); setDataVersion(v => v + 1); }
+    }
+  }
+  const coverage = result.data?.coverage;
+  return <section className="panel conference-authors">
+    <h2>Authors & institutions</h2>
+    <p>Authors follow the collected paper roster. Institutions come from supported paper-time evidence. Each author–paper–institution has a separate row; missing institutions stay blank in CSV.</p>
+    <p>New PDF downloads are processed automatically. Use extraction for earlier downloads. Complex layouts and image-only PDFs may need review; extracted evidence is unverified until reviewed.</p>
+    {coverage && <p>{coverage.with_institutions} of {coverage.author_paper_pairs} author–paper records have institution evidence · {coverage.papers_without_authors} papers have no author roster.</p>}
+    <div className="toolbar">
+      <button disabled={running} onClick={extract}>{running ? "Extracting…" : "Extract downloaded papers"}</button>
+      {running && <button onClick={() => { generation.current++; setRunning(false); setMessage("Stopped after the current batch. Saved results are retained."); }}>Stop extraction</button>}
+      <button onClick={() => download(`/conferences/${editionId}/authors.csv?${queryParams({q: filters.author_q, status: filters.author_status})}`, "conference-authors.csv").catch(e => setFailure(e.message))}>Export matching CSV</button>
+      <button onClick={() => download(`/conferences/${editionId}/authors.csv`, "conference-authors-all.csv").catch(e => setFailure(e.message))}>Export all CSV</button>
+      <button onClick={() => download(`/conferences/${editionId}/authors.pdf?${queryParams({q: filters.author_q, status: filters.author_status})}`, "conference-authors.pdf").catch(e => setFailure(e.message))}>Export matching PDF</button>
+      <button onClick={() => download(`/conferences/${editionId}/authors.pdf`, "conference-authors-all.pdf").catch(e => setFailure(e.message))}>Export all PDF</button>
+    </div>
+    <p role="status">{message}</p>{failure && <p role="alert" className="error">{failure}</p>}
+    <div className="toolbar">
+      <label>Search authors, institutions or papers<input value={filters.author_q} maxLength={200} onChange={e => setFilters({author_q: e.target.value, page: "1"}, true)} /></label>
+      <label>Institution evidence<select value={filters.author_status} onChange={e => setFilters({author_status: e.target.value, page: "1"})}>
+        <option value="">All statuses</option><option value="missing">Missing</option><option value="extracted">Extracted (unverified)</option><option value="needs_review">Needs review</option><option value="verified">Verified</option>
+      </select></label>
+    </div>
+    <State {...result}>{result.data && <>
+      <p>{result.data.total} matching rows. CSV and PDF exports include every matching page.</p>
+      <div className="author-table-scroll"><table><caption>Conference author and institution evidence</caption><thead><tr><th>Author</th><th>Institution</th><th>Paper</th><th>Status</th><th>Evidence</th></tr></thead><tbody>
+        {result.data.items.map((row: Row, index: number) => <tr key={index}>
+          <td><a href={`#/authors/${row.author_id}?collection=${collection}`}>{row.author}</a></td>
+          <td>{row.institution || "Not extracted"}</td>
+          <td><a href={`#/papers/${row.paper_id}?collection=${collection}`}>{row.paper_title}</a></td>
+          <td>{row.status === "missing" ? "Missing institution" : <StatusBadge status={row.status} />}</td>
+          <td>{row.excerpt ? <details><summary>{row.page ? `PDF page ${row.page}` : "Source evidence"}</summary><p>{row.excerpt}</p><p>{row.method}</p><a href={row.source_url} target="_blank" rel="noreferrer">View source</a></details> : `Extraction: ${row.extraction_status.replaceAll("_", " ")}`}</td>
+        </tr>)}
+      </tbody></table></div>
+      {result.data.total === 0 && <p>No matching author records.</p>}
+    </>}</State>
+    <Pagination result={result.data} onPage={page => setFilters({page: String(page)})} onSize={page_size => setFilters({page_size, page: "1"})} />
+  </section>;
 }
 function Paper() {
   const { download, id } = useApp();

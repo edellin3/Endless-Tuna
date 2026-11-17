@@ -1636,3 +1636,10 @@ summary:focus-visible { outline: 3px solid #426eed; outline-offset: 3px; }
 @media (max-width: 560px) {
   .toolbar:has(> input[aria-label="Filter conference papers"]) > input { flex-basis: 100%; }
 }
+.conference-tabs { margin: 20px 0; }
+.conference-tabs button[aria-current="page"] { background: #2459D3; color: white; }
+.author-table-scroll { overflow-x: auto; }
+.conference-authors table { width: 100%; border-collapse: collapse; }
+.conference-authors th, .conference-authors td { padding: 12px; text-align: left; vertical-align: top; border-bottom: 1px solid #DCE3EE; }
+.conference-authors caption { text-align: left; margin: 12px 0; color: #53627A; }
+.conference-authors td { min-width: 130px; overflow-wrap: anywhere; }
