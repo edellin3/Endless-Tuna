@@ -76,6 +76,24 @@ The existing ten real NeurIPS PDFs were processed locally with **zero model requ
 
 ## Conference authors and institutions
 
+From **Authors**, enter a conference name and optional year in **Search
+conference name or year**. Choose the stored edition, then click **Compile all
+authors CSV** or **Compile all authors PDF**. Compilation visits every paper in
+that edition's dataset in bounded batches, extracts supported affiliations, and
+downloads all author/institution records regardless of the table filters.
+Conference search matches conference names and years, rather than paper text.
+It displays dataset size and incomplete inventory; it never downloads an entire
+new conference implicitly. Selection stays in the URL.
+
+For complex layouts, select **Use configured LAS AI for complex affiliations**
+before compiling. That explicit action enables the existing centralized,
+evidence-validated LAS extractor for this run. It requires a configured model
+and credentials. Automatic collection remains deterministic. Model proposals
+are unverified; failed/missing evidence remains visible. An author can have
+several institutions on one paper and different institutions on another paper;
+no institution is copied from another paper just because a name matches.
+Local numbered mapping supports multi-digit and superscript institution markers.
+
 Open a conference and choose **Authors & institutions**. Search by author,
 institution or paper title and filter by evidence status. The table preserves
 author order and identity IDs, with a row for each paper–author–institution

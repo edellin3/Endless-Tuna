@@ -22,6 +22,12 @@ def norm(text):return ' '.join(text.casefold().split())
 def contains(text,value):return bool(re.search(r'(?<!\w)'+re.escape(norm(value))+r'(?!\w)',norm(text)))
 
 
+def contains_author(text,name):
+    # PDF author names often touch numeric/superscript affiliation markers.
+    # Keep a trailing word boundary so a shorter same-name prefix cannot match.
+    return bool(re.search(r'(?<!\w)'+re.escape(norm(name))+r'[0-9¹²³⁴⁵⁶⁷⁸⁹⁰]*(?!\w)',norm(text)))
+
+
 def orcid_url(value):
     raw=value.removeprefix('https://orcid.org/').removeprefix('http://orcid.org/')
     if not re.fullmatch(r'\d{4}-\d{4}-\d{4}-\d{3}[\dX]',raw):raise EnrichmentError('Use a full, checksum-valid ORCID identifier.')
@@ -108,7 +114,7 @@ def validate_assertion(con,aid,data,method):
     if data.kind in ('affiliation','current_affiliation'):
         org=data.organization or data.value
         if norm(org)!=norm(data.value):raise EnrichmentError('Affiliation value must be the stated organization, without unsupported normalization.')
-        if not contains(quote,author['name']) or not contains(quote,org):raise EnrichmentError('Affiliation evidence must include this author and the stated organization.')
+        if not contains_author(quote,author['name']) or not contains(quote,org):raise EnrichmentError('Affiliation evidence must include this author and the stated organization.')
     elif data.kind in ('organization_country','organization_city'):
         org=data.organization
         if not org or not contains(quote,org) or not contains(quote.replace(norm(org),''),data.value):raise EnrichmentError('Location must be explicitly supported by the organization excerpt; do not infer it from a name.')
@@ -197,11 +203,16 @@ def deterministic_claims(authors,pages):
                             claims.append(Claim(author_position=author['position'],author_name=author['name'],kind='affiliation',organization=org,value=org,excerpt=excerpt,page=page['page']))
             # Explicit numeric affiliation markers, never nearest-name guesses.
             if page['page']!=1:continue
-            marker=re.search(name+r'\s*(?:\[([1-9](?:\s*,\s*[1-9])*)\]|([¹²³⁴⁵⁶⁷⁸⁹]+)|([1-9](?:,[1-9])*))(?=\s|,|$)',header,re.I)
+            numeric=r'[1-9][0-9]?(?:\s*,\s*[1-9][0-9]?)*'
+            superscript=r'[¹²³⁴⁵⁶⁷⁸⁹⁰]+(?:\s*,\s*[¹²³⁴⁵⁶⁷⁸⁹⁰]+)*'
+            marker=re.search(name+r'\s*(?:\[('+numeric+r')\]|('+superscript+r')|('+numeric+r'))(?=\s|,|$)',header,re.I)
             if not marker:continue
-            markers=list(marker[2].translate(str.maketrans('¹²³⁴⁵⁶⁷⁸⁹','123456789'))) if marker[2] else re.findall('[1-9]',marker[1] or marker[3])
+            codes=(marker[2] or marker[1] or marker[3]).translate(str.maketrans('¹²³⁴⁵⁶⁷⁸⁹⁰','1234567890'))
+            markers=re.findall(r'[1-9][0-9]?',codes)
             for code in markers:
-                for orgline in re.finditer(r'(?m)^\s*'+code+r'[ .)\t]+([^\n]{3,300})$',text):
+                supcode=code.translate(str.maketrans('1234567890','¹²³⁴⁵⁶⁷⁸⁹⁰'))
+                label=r'(?:'+code+r'[ .)\t]+|\['+code+r'\]\s*|'+supcode+r'\s*)'
+                for orgline in re.finditer(r'(?m)^\s*'+label+r'([^\n]{3,300})$',text):
                     org=orgline[1].strip()
                     if not ORG.search(org):continue
                     start=min(marker.start(),orgline.start());end=max(marker.end(),orgline.end())

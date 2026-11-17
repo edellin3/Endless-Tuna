@@ -10,6 +10,13 @@ The Option 3 dashboard uses a bright #F6F8FC page, white rounded cards, a large 
 
 Paste its link in **Add conference** and click **Collect papers**. Titles and available free PDFs arrive automatically on one conference page. The default is a ten-paper quick test; choose **Entire conference** for all papers. Pause/resume and attention counts stay on that page. [Automatic collection](docs/automatic-collection.md).
 
+To compile a conference's people, open **Authors**, search its name/year, select
+the edition, then choose **Compile all authors CSV** or **Compile all authors
+PDF**. This processes every paper in the stored dataset and pairs each author
+with supported paper-time institutions. Optional configured LAS handles complex
+layouts when explicitly selected. Missing evidence stays flagged, and partial
+datasets stay labeled. [Author extraction and exports](docs/enrichment.md).
+
 ## Open in VS Code
 
 Open this folder, or open [endless-tuna.code-workspace](endless-tuna.code-workspace). All paths below are relative to this folder, not the parent `prototype` workspace.

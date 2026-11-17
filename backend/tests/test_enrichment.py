@@ -70,6 +70,19 @@ def test_marker_mapping_multiple_affiliations(session):
     assert len([a for a in data if a['author_id']=='a1'])==2
 
 
+@pytest.mark.parametrize('text',[
+    'Mira Chen[10,12]  Alex Rivera[12]\n[10] Tidal Research Institute\n[12] Northstar Lab',
+    'Mira Chen¹⁰,¹²  Alex Rivera¹²\n¹⁰ Tidal Research Institute\n¹² Northstar Lab',
+])
+def test_multi_digit_and_superscript_institution_markers(session,text):
+    pages(text)
+    result=session.post('/api/papers/harbor-0/enrich',json={}).json()
+    assert result['assertions_added']==3
+    data=session.get('/api/papers/harbor-0/enrichment').json()['assertions']
+    assert {a['value'] for a in data if a['author_id']=='a1'}=={'Tidal Research Institute','Northstar Lab'}
+    assert {a['value'] for a in data if a['author_id']=='a2'}=={'Northstar Lab'}
+
+
 def test_deterministic_metadata_organizations_have_provenance(session):
     with db.connect() as con:
         record=Metadata(title='Fictional metadata source',source_url='https://example.org/meta-paper',authors=[Person(name='Metadata Author',organizations=['First Institute','Second University'])])

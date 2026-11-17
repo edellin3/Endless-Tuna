@@ -232,6 +232,32 @@ try {
     await page.getByRole("heading", {name: "Authors & institutions", exact: true}).waitFor();
     return "Search and tab survive history; CSV and PDF download filtered author-paper rows; no LAS; axe passes.";
   });
+  await check("Authors: conference-name search compiles the entire dataset as CSV and PDF", async () => {
+    await page.goto(base + "/#/authors?collection=demo");
+    await page.getByLabel("Search conference name or year").fill("Harbor 2025");
+    await page.getByRole("button", {name: "Use Harbor Robotics Forum 2025", exact: true}).click();
+    await page.getByRole("table").waitFor();
+    assert.ok(page.url().includes("author_edition=harbor"));
+    assert.equal(await page.getByLabel("Use configured LAS AI for complex affiliations").isChecked(), false);
+    await page.getByLabel("Search authors, institutions or papers").fill("Mira");
+    await until(async () => await page.locator(".conference-authors tbody tr").count() === 2, "Author filter did not apply");
+    const csvWaiting=page.waitForEvent("download");
+    await page.getByRole("button", {name: "Compile all authors CSV", exact: true}).click();
+    const csvDownload=await csvWaiting;
+    const report=fs.readFileSync(await csvDownload.path(), "utf8");
+    assert.ok(report.includes("Mira Chen") && report.includes("Alex Rivera") && report.includes("Sam Okafor"));
+    assert.ok(report.includes("Tidal Research Institute") && report.includes("Northstar Lab"));
+    await page.getByRole("status").filter({hasText: "3 dataset papers"}).waitFor();
+    const pdfWaiting=page.waitForEvent("download");
+    await page.getByRole("button", {name: "Compile all authors PDF", exact: true}).click();
+    assert.equal(fs.readFileSync(await (await pdfWaiting).path()).subarray(0,5).toString(), "%PDF-");
+    await page.reload();
+    await page.getByRole("heading", {name: "Harbor Robotics Forum 2025", exact: true}).waitFor();
+    await page.getByRole("table").waitFor();
+    const axe=await new AxeBuilder({page}).withTags(["wcag2a", "wcag2aa"]).analyze();
+    assert.deepEqual(axe.violations.map(v => v.id), []);
+    return "Name/year selects the stored edition; both compile actions process all 3 dataset papers and export all authors even with a table filter; URL selection survives reload; axe passes.";
+  });
   let savedSearch;
   await check("1. Clearly labeled demo and operation without LAS", async () => {
     await page.goto(base + "/#/?collection=demo");

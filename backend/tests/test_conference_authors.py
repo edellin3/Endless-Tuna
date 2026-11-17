@@ -111,3 +111,32 @@ def test_pdf_long_evidence_remains_readable_across_pages(client):
     assert len(report.pages)>1 and 'Evidence end.' in text
     assert 'https://example.org/evidence' in text and 'Northstar Lab' in text
     assert 'needs_review (unverified)' in text
+
+
+def test_conference_name_search_is_scoped_to_names_years_and_collection(client):
+    result=client.get('/api/author-conferences?q=Harbor%202025').json()
+    assert result['total']==1
+    assert result['items'][0]['id']=='harbor'
+    assert result['items'][0]['papers']==3 and result['items'][0]['author_records']==6
+    assert client.get('/api/author-conferences?q=2025').json()['total']==2
+    assert client.get('/api/author-conferences?q=grippers').json()['total']==0
+    assert client.get('/api/author-conferences?q=%25').json()['total']==0
+    assert client.get('/api/author-conferences?q=Harbor',headers={'X-Collection':'real'}).json()['total']==0
+    assert client.get('/api/author-conferences').json()['items']==[]
+
+
+def test_compile_entire_dataset_and_explicit_ai_option(client,monkeypatch):
+    from endless_tuna import conference_authors
+    calls=[]
+    def extract(collection,pid,use_las):
+        calls.append((collection,pid,use_las))
+        return {'status':'no_evidence'}
+    monkeypatch.setattr(conference_authors,'enrich_paper',extract)
+    response=client.post('/api/conferences/harbor/authors/extract',json={'all_papers':True}).json()
+    assert len(response['results'])==3
+    assert {pid for _,pid,_ in calls}=={'harbor-0','harbor-1','harbor-2'}
+    assert all(not ai for _,_,ai in calls)
+    calls.clear()
+    client.post('/api/conferences/harbor/authors/extract',json={'all_papers':True,'use_las':True})
+    assert len(calls)==3 and all(ai for _,_,ai in calls)
+    assert client.post('/api/conferences/harbor/authors/extract',json={'unknown':True}).status_code==422

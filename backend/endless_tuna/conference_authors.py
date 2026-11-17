@@ -5,9 +5,16 @@ import tempfile
 from fastapi import Depends, Query
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
+from pydantic import BaseModel, ConfigDict
 from . import db
 from .enrichment import enrich_paper, EnrichmentError
 from .exports import safe_cell
+
+
+class ConferenceExtraction(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    use_las:bool=False
+    all_papers:bool=False
 
 
 ROWS = """
@@ -38,6 +45,25 @@ def selection(edition, q, status):
 
 
 def register_conference_authors(app, collection, get):
+    @app.get('/api/author-conferences')
+    def find_conferences(q:str=Query('',max_length=200),page:int=Query(1,ge=1),c=Depends(collection)):
+        # Match conference names/years only; paper content is a separate search.
+        terms=q.split()
+        if not terms:return {'items':[],'total':0,'page':page,'pages':0,'page_size':25}
+        where=[];args=[]
+        for term in terms:
+            literal=term.replace('\\','\\\\').replace('%','\\%').replace('_','\\_')
+            where.append("(s.name || ' ' || e.year) LIKE ? ESCAPE '\\'")
+            args.append('%'+literal+'%')
+        base=' FROM editions e JOIN series s ON s.id=e.series_id WHERE '+' AND '.join(where)
+        with db.connect(c) as con:
+            total=con.execute('SELECT COUNT(*)'+base,args).fetchone()[0]
+            rows=[dict(r) for r in con.execute('SELECT e.id,s.name,e.year,e.inventory_complete'+base+' ORDER BY e.year DESC,s.name,e.id LIMIT 25 OFFSET ?',args+[(page-1)*25])]
+            for row in rows:
+                row['papers']=con.execute('SELECT COUNT(DISTINCT paper_id) FROM paper_editions WHERE edition_id=?',(row['id'],)).fetchone()[0]
+                row['author_records']=con.execute('SELECT COUNT(*) FROM authorship WHERE paper_id IN (SELECT paper_id FROM paper_editions WHERE edition_id=?)',(row['id'],)).fetchone()[0]
+            return {'items':rows,'total':total,'page':page,'pages':(total+24)//25,'page_size':25}
+
     @app.get('/api/conferences/{id}/authors')
     def directory(id:str,q:str=Query('',max_length=200),status:str=Query('',pattern='^(|missing|extracted|needs_review|verified)$'),page:int=Query(1,ge=1),page_size:int=Query(25,ge=1,le=100),c=Depends(collection)):
         with db.connect(c) as con:
@@ -72,18 +98,19 @@ def register_conference_authors(app, collection, get):
         return StreamingResponse(chunks(),media_type='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename="conference-authors.csv"'})
 
     @app.post('/api/conferences/{id}/authors/extract')
-    def extract(id:str,after:str=Query('',max_length=200),c=Depends(collection)):
+    def extract(id:str,body:ConferenceExtraction=ConferenceExtraction(),after:str=Query('',max_length=200),c=Depends(collection)):
         # Small resumable batches keep old downloads usable without long HTTP requests.
         with db.connect(c) as con:
             get(con,'editions',id)
             ids=[r[0] for r in con.execute("""SELECT DISTINCT pe.paper_id FROM paper_editions pe
-                WHERE pe.edition_id=? AND pe.paper_id>? AND EXISTS(SELECT 1 FROM downloads d
-                WHERE d.paper_id=pe.paper_id AND d.status='available' AND pdf_exists(d.path))
-                ORDER BY pe.paper_id LIMIT 11""",(id,after))]
+                WHERE pe.edition_id=? AND pe.paper_id>? AND (? OR EXISTS(SELECT 1 FROM downloads d
+                WHERE d.paper_id=pe.paper_id AND d.status='available' AND pdf_exists(d.path)))
+                ORDER BY pe.paper_id LIMIT 11""",(id,after,body.all_papers))]
         results=[]
         for pid in ids[:10]:
-            try:results.append({'paper_id':pid,**enrich_paper(c,pid,use_las=False)})
+            try:results.append({'paper_id':pid,**enrich_paper(c,pid,use_las=body.use_las)})
             except EnrichmentError as error:results.append({'paper_id':pid,'status':'failed','error':str(error)})
+            except Exception:results.append({'paper_id':pid,'status':'failed','error':'Paper extraction failed. Saved records were preserved; review or retry this paper.'})
         return {'results':results,'next_after':ids[9] if len(ids)>10 else None}
 
     @app.get('/api/conferences/{id}/authors.pdf')

@@ -8,13 +8,22 @@ downloads. Both matching and whole-conference exports are available as CSV and
 searchable PDF reports. Evidence and review statuses are preserved; a full PDF
 download count is not a claim of full affiliation extraction.
 
-Verified locally with 201 passing offline backend tests, a successful frontend
+The **Authors** page also accepts conference-name/year searches and edition
+selection. Its **Compile all authors CSV/PDF** actions process every dataset
+paper before downloading all records, independently of the table filters.
+LAS extraction requires an explicit checkbox and compile/extract action.
+Multi-digit and superscript institution markers retain author associations.
+
+Verified locally with 205 passing offline backend tests, a successful frontend
 production build, and the full isolated Playwright acceptance workflow through
 the actual Vite proxy. The new browser check downloads both formats and passes
 axe accessibility checks. Backend checks cover collection isolation, literal
 search, conference memberships, multiple institutions, missing rosters,
 spreadsheet formula protection, bounded extraction batches, Unicode PDF text and
-long evidence spanning pages. Dependency consistency (`pip check`) passes.
+long evidence spanning pages. The Authors workflow additionally checks conference
+name/year matching, every-paper scope, explicit AI selection, compilation with
+active table filters, both downloads, reload persistence and axe accessibility.
+Dependency consistency (`pip check`) passes.
 These are fictional/mocked checks; no new live collection or LAS checks were run.
 
 Verified 2026-11-10 on Ubuntu, Python 3.12 and Node 24. The repository was prepared locally: no remote creation, staging/commit, push, public deployment or license selection was performed. The existing Option 3 dashboard, stored collections and LAS-only model path were preserved.

@@ -925,23 +925,25 @@ function ConferenceAuthors({ editionId }: { editionId: string }) {
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState("");
   const [failure, setFailure] = useState("");
+  const [useLAS, setUseLAS] = useState(false);
   const generation = useRef(0);
   useEffect(() => () => { generation.current++; }, [editionId, collection]);
-  async function extract() {
+  async function extract(format?: "csv" | "pdf") {
     const token = ++generation.current;
-    setRunning(true); setFailure(""); setMessage("Extracting downloaded papers…");
+    setRunning(true); setFailure(""); setMessage(format ? "Compiling every paper in the conference dataset…" : "Extracting downloaded papers…");
     let after = "", count = 0, failed = 0;
     try {
       do {
-        const batch = await api(`/conferences/${editionId}/authors/extract?after=${encodeURIComponent(after)}`, {});
+        const batch = await api(`/conferences/${editionId}/authors/extract?after=${encodeURIComponent(after)}`, {use_las: useLAS, all_papers: !!format});
         if (generation.current !== token) return;
         count += batch.results.length;
-        failed += batch.results.filter((r: Row) => r.status === "failed").length;
-        setMessage(`Processed ${count} downloaded papers${failed ? ` · ${failed} need attention` : ""}.`);
+        failed += batch.results.filter((r: Row) => ["failed", "no_evidence", "needs_review"].includes(r.status)).length;
+        setMessage(`Processed ${count} ${format ? "dataset" : "downloaded"} papers${failed ? ` · ${failed} need attention` : ""}.`);
         after = batch.next_after || "";
         setDataVersion(v => v + 1);
       } while (after);
-      setMessage(`Extraction finished for ${count} downloaded papers${failed ? ` · ${failed} need attention` : ""}. Missing affiliations need paper review.`);
+      setMessage(`Extraction finished for ${count} ${format ? "dataset" : "downloaded"} papers${failed ? ` · ${failed} need attention` : ""}. Missing affiliations need paper review.`);
+      if (format) await download(`/conferences/${editionId}/authors.${format}`, `conference-authors-all.${format}`);
     } catch (e: any) {
       if (generation.current === token) setFailure(e.message);
     } finally {
@@ -954,8 +956,18 @@ function ConferenceAuthors({ editionId }: { editionId: string }) {
     <p>Authors follow the collected paper roster. Institutions come from supported paper-time evidence. Each author–paper–institution has a separate row; missing institutions stay blank in CSV.</p>
     <p>New PDF downloads are processed automatically. Use extraction for earlier downloads. Complex layouts and image-only PDFs may need review; extracted evidence is unverified until reviewed.</p>
     {coverage && <p>{coverage.with_institutions} of {coverage.author_paper_pairs} author–paper records have institution evidence · {coverage.papers_without_authors} papers have no author roster.</p>}
+    <div className="panel compile-authors">
+      <h3>Compile the entire conference dataset</h3>
+      <p>Extract supported institutions for every paper, then download every author and their paper-time institutions. These downloads include all records, regardless of the table search below.</p>
+      <label className="check-label"><input type="checkbox" checked={useLAS} disabled={running} onChange={e => setUseLAS(e.target.checked)} />Use configured LAS AI for complex affiliations</label>
+      <p className="diagnostic-help">AI runs only when selected and you start extraction. Requires a configured model; proposed affiliations still need review. Missing PDFs, text or affiliation evidence remain flagged.</p>
+      <div className="toolbar">
+        <button disabled={running} onClick={() => extract("csv")}>Compile all authors CSV</button>
+        <button disabled={running} onClick={() => extract("pdf")}>Compile all authors PDF</button>
+      </div>
+    </div>
     <div className="toolbar">
-      <button disabled={running} onClick={extract}>{running ? "Extracting…" : "Extract downloaded papers"}</button>
+      <button disabled={running} onClick={() => extract()}>{running ? "Extracting…" : "Extract downloaded papers"}</button>
       {running && <button onClick={() => { generation.current++; setRunning(false); setMessage("Stopped after the current batch. Saved results are retained."); }}>Stop extraction</button>}
       <button onClick={() => download(`/conferences/${editionId}/authors.csv?${queryParams({q: filters.author_q, status: filters.author_status})}`, "conference-authors.csv").catch(e => setFailure(e.message))}>Export matching CSV</button>
       <button onClick={() => download(`/conferences/${editionId}/authors.csv`, "conference-authors-all.csv").catch(e => setFailure(e.message))}>Export all CSV</button>
@@ -1106,8 +1118,48 @@ function Paper() {
     </State>
   );
 }
+function ConferenceAuthorSearch() {
+  const { collection } = useApp();
+  const [search, setSearch] = useSearchURL({conference_q: "", author_edition: "", conference_page: "1"});
+  const result = useData(`/author-conferences?${queryParams({q: search.conference_q, page: String(Math.max(1, Number(search.conference_page) || 1))})}`);
+  return <section aria-label="Conference author compilation">
+    <div className="panel">
+      <h2>Find authors by conference</h2>
+      <p>Enter a conference name, choose its edition, then compile a CSV or PDF of every author and institution in its stored dataset.</p>
+      <label>Search conference name or year<input className="directory-search" placeholder="e.g. NeurIPS 2026" value={search.conference_q} maxLength={200} onChange={e => setSearch({conference_q: e.target.value, author_edition: "", conference_page: "1"}, true)} /></label>
+      {search.author_edition && <button onClick={() => setSearch({author_edition: ""})}>Change conference</button>}
+      {!search.author_edition && search.conference_q.trim() && <State {...result}>
+        <div className="conference-author-matches">
+          {result.data?.items.map((conference: Row) => <div className="panel" key={conference.id}>
+            <h3>{conference.name} {conference.year}</h3>
+            <p>{conference.papers} dataset papers · {conference.author_records} author–paper records{!conference.inventory_complete && " · Inventory incomplete or unverified"}</p>
+            <button onClick={() => setSearch({author_edition: conference.id, author_q: "", author_status: "", page: "1"})}>Use {conference.name} {conference.year}</button>
+          </div>)}
+        </div>
+        {result.data?.total === 0 && <p>No indexed conference matches this name in the {collection} collection. Add and collect the conference first, or switch collections.</p>}
+        {result.data?.pages > 1 && <div className="toolbar">
+          <button disabled={result.data.page <= 1} onClick={() => setSearch({conference_page: String(result.data.page - 1)})}>Previous conferences</button>
+          <span>Page {result.data.page} of {result.data.pages}</span>
+          <button disabled={result.data.page >= result.data.pages} onClick={() => setSearch({conference_page: String(result.data.page + 1)})}>Next conferences</button>
+        </div>}
+      </State>}
+    </div>
+    {search.author_edition && <SelectedAuthorConference key={`${collection}-${search.author_edition}`} editionId={search.author_edition} />}
+  </section>;
+}
+
+function SelectedAuthorConference({editionId}: {editionId: string}) {
+  const result = useData(`/conferences/${encodeURIComponent(editionId)}?include_papers=false`);
+  return <State {...result}>{result.data && <>
+    <h2>{result.data.name} {result.data.year}</h2>
+    <p>{result.data.coverage.inventory_records} stored papers · {result.data.coverage.pdfs} PDFs available{!result.data.coverage.inventory_complete && " · Inventory incomplete or unverified"}. Compilation covers this stored dataset.</p>
+    <ConferenceAuthors editionId={editionId} />
+  </>}</State>;
+}
+
 function Authors() {
-  const { id } = useApp();
+  const { id, query } = useApp();
+  const conferenceSelected = !id && !!new URLSearchParams(query).get("author_edition");
   const [search, setSearch] = useSearchURL({
     q: "",
     organization: "",
@@ -1137,7 +1189,8 @@ function Authors() {
           <p>Paper-time affiliations, with evidence you can inspect.</p>
         </div>
       </div>
-      {!id && (
+      {!id && <ConferenceAuthorSearch />}
+      {!id && !conferenceSelected && (
         <div className="toolbar author-filters">
           <input
             aria-label="Search authors"
@@ -1177,7 +1230,7 @@ function Authors() {
           </select>
         </div>
       )}
-      <State data={data} error={error}>
+      {!conferenceSelected && <State data={data} error={error}>
         {id ? (
           data && <AuthorEvidenceDetail author={data} />
         ) : (
@@ -1218,7 +1271,7 @@ function Authors() {
             )}
           </div>
         )}
-      </State>
+      </State>}
       <p className="collection-note">
         Names and original author order are preserved. Organization location
         does not establish nationality or residence.
