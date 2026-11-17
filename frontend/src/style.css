@@ -1643,3 +1643,4 @@ summary:focus-visible { outline: 3px solid #426eed; outline-offset: 3px; }
 .conference-authors th, .conference-authors td { padding: 12px; text-align: left; vertical-align: top; border-bottom: 1px solid #DCE3EE; }
 .conference-authors caption { text-align: left; margin: 12px 0; color: #53627A; }
 .conference-authors td { min-width: 130px; overflow-wrap: anywhere; }
+.conference-authors .info a { text-decoration: underline; }

@@ -137,6 +137,27 @@ def test_compile_entire_dataset_and_explicit_ai_option(client,monkeypatch):
     assert {pid for _,pid,_ in calls}=={'harbor-0','harbor-1','harbor-2'}
     assert all(not ai for _,_,ai in calls)
     calls.clear()
+    from types import SimpleNamespace
+    from endless_tuna.las import LASConfig
+    monkeypatch.setattr(conference_authors.las_settings,'configured_client',lambda:SimpleNamespace(config=LASConfig('https://mock.invalid/v1','fixture-key','fixture-model')))
     client.post('/api/conferences/harbor/authors/extract',json={'all_papers':True,'use_las':True})
     assert len(calls)==3 and all(ai for _,_,ai in calls)
     assert client.post('/api/conferences/harbor/authors/extract',json={'unknown':True}).status_code==422
+
+
+def test_ai_preflight_stops_before_creating_failed_runs(client):
+    status=client.get('/api/conferences/harbor/authors/extraction-status').json()
+    assert status['papers']==3 and status['pdfs']==1 and status['readable_papers']==0
+    assert status['missing_pdfs']==2 and not status['las_ready']
+    response=client.post('/api/conferences/harbor/authors/extract',json={'all_papers':True,'use_las':True})
+    assert response.status_code==409 and 'Configure LAS' in response.json()['detail']
+    with db.connect() as con:assert con.execute('SELECT COUNT(*) FROM enrichment_runs').fetchone()[0]==0
+
+
+def test_missing_pdf_is_a_source_issue_without_ai_requests(client,monkeypatch):
+    from endless_tuna import las_settings
+    def forbidden():raise AssertionError('A missing PDF must not trigger model configuration or inference.')
+    monkeypatch.setattr(las_settings,'configured_client',forbidden)
+    response=client.post('/api/papers/harbor-1/enrich',json={'use_las':True}).json()
+    assert response['status']=='no_evidence' and response['code']=='source_required'
+    assert response['las_requests']==0

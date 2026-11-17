@@ -258,6 +258,20 @@ try {
     assert.deepEqual(axe.violations.map(v => v.id), []);
     return "Name/year selects the stored edition; both compile actions process all 3 dataset papers and export all authors even with a table filter; URL selection survives reload; axe passes.";
   });
+  await check("Author extraction exposes missing PDFs and blocks unconfigured AI", async () => {
+    await page.goto(base + "/#/authors?collection=demo&conference_q=Summit&author_edition=summit");
+    await page.getByRole("heading", {name: "Summit Learning Symposium 2025", exact: true}).waitFor();
+    await page.getByText("0 of 3 dataset papers have readable PDF text", {exact:false}).waitFor();
+    assert.equal(await page.getByLabel("Use configured LAS AI for complex affiliations").isDisabled(),true);
+    assert.equal(await page.getByRole("button", {name:"Compile all authors CSV",exact:true}).isDisabled(),true);
+    await page.getByText("AI unavailable:", {exact:false}).waitFor();
+    const response=await page.request.post(base+'/api/conferences/summit/authors/extract',{headers:{Origin:base,'X-Collection':'demo'},data:{all_papers:true,use_las:true}});
+    assert.equal(response.status(),409);
+    assert.ok((await response.json()).detail.includes("Configure LAS"));
+    const state=await api('/papers/summit-0/enrichment');
+    assert.equal(state.runs.length,0);
+    return "Missing PDF/text coverage and configuration are visible before a run; unconfigured AI is rejected once without per-paper failed runs.";
+  });
   let savedSearch;
   await check("1. Clearly labeled demo and operation without LAS", async () => {
     await page.goto(base + "/#/?collection=demo");

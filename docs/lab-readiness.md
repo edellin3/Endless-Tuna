@@ -1,5 +1,28 @@
 # Local lab preparation results
 
+## Institution extraction repair — 2026-11-17
+
+The stored NeurIPS 2026 compilation had 9,139 `missing_configuration` failures:
+AI was selected without configured LAS credentials/model. Only 2 of those 9,139
+papers had downloaded PDFs; collection had paused on OpenReview HTTP 403s.
+Configuration checks now stop such AI batches before paper runs. The view shows
+missing PDFs, readable text, actual collection messages and specific extraction
+errors; it does not automatically download an empty institution report.
+
+Fixed real PDF-layout parsing and validated conservative associations with
+fictional regression cases. After backing up the stopped real SQLite database
+and matching PDFs together under ignored runtime storage, reprocessed all 25
+downloaded real papers locally: 120 of 140 author–paper records now have supported
+unverified institution evidence, including all six authors in the two NeurIPS
+2026 PDFs. Original assertions/review history were retained. The other 9,137
+NeurIPS PDFs are still unavailable locally; no access controls were bypassed.
+No live collection or model calls were made for the repair.
+
+Verification: 218 offline backend tests, frontend production build and full
+Playwright acceptance through Vite, including missing-PDF/AI preflight and axe
+accessibility checks. The stored-data repair is a separate real-PDF local check;
+no full-conference affiliation completeness or live LAS access is claimed.
+
 ## Authors and institutions exports — 2026-11-17
 
 Added the conference **Authors & institutions** view with URL-backed search,

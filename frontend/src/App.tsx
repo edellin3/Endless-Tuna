@@ -922,6 +922,7 @@ function ConferenceAuthors({ editionId }: { editionId: string }) {
   const [filters, setFilters] = useSearchURL({author_q: "", author_status: "", page: "1", page_size: "25"});
   const params = queryParams({q: filters.author_q, status: filters.author_status, page: filters.page, page_size: filters.page_size});
   const result = useData(`/conferences/${editionId}/authors?${params}&revision=${dataVersion}`);
+  const diagnostics = useData(`/conferences/${editionId}/authors/extraction-status?revision=${dataVersion}`);
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState("");
   const [failure, setFailure] = useState("");
@@ -932,18 +933,29 @@ function ConferenceAuthors({ editionId }: { editionId: string }) {
     const token = ++generation.current;
     setRunning(true); setFailure(""); setMessage(format ? "Compiling every paper in the conference dataset…" : "Extracting downloaded papers…");
     let after = "", count = 0, failed = 0;
+    const reasons: Record<string, number> = {};
     try {
       do {
         const batch = await api(`/conferences/${editionId}/authors/extract?after=${encodeURIComponent(after)}`, {use_las: useLAS, all_papers: !!format});
         if (generation.current !== token) return;
         count += batch.results.length;
         failed += batch.results.filter((r: Row) => ["failed", "no_evidence", "needs_review"].includes(r.status)).length;
+        for (const r of batch.results) if (r.code || r.error) {
+          const reason = r.message || r.error || r.code;
+          reasons[reason] = (reasons[reason] || 0) + 1;
+        }
         setMessage(`Processed ${count} ${format ? "dataset" : "downloaded"} papers${failed ? ` · ${failed} need attention` : ""}.`);
         after = batch.next_after || "";
         setDataVersion(v => v + 1);
       } while (after);
       setMessage(`Extraction finished for ${count} ${format ? "dataset" : "downloaded"} papers${failed ? ` · ${failed} need attention` : ""}. Missing affiliations need paper review.`);
-      if (format) await download(`/conferences/${editionId}/authors.${format}`, `conference-authors-all.${format}`);
+      if (failed) setFailure(Object.entries(reasons).map(([reason, papers]) => `${papers} papers: ${reason}`).join(" "));
+      if (format) {
+        const status = await api(`/conferences/${editionId}/authors/extraction-status`);
+        if (generation.current !== token) return;
+        if (status.with_institutions > 0) await download(`/conferences/${editionId}/authors.${format}`, `conference-authors-all.${format}`);
+        else setFailure("No institution evidence was extracted, so no report was automatically downloaded. Check PDF coverage and the extraction reasons below. You can still export the author roster manually.");
+      }
     } catch (e: any) {
       if (generation.current === token) setFailure(e.message);
     } finally {
@@ -956,14 +968,22 @@ function ConferenceAuthors({ editionId }: { editionId: string }) {
     <p>Authors follow the collected paper roster. Institutions come from supported paper-time evidence. Each author–paper–institution has a separate row; missing institutions stay blank in CSV.</p>
     <p>New PDF downloads are processed automatically. Use extraction for earlier downloads. Complex layouts and image-only PDFs may need review; extracted evidence is unverified until reviewed.</p>
     {coverage && <p>{coverage.with_institutions} of {coverage.author_paper_pairs} author–paper records have institution evidence · {coverage.papers_without_authors} papers have no author roster.</p>}
+    {diagnostics.error && <p role="alert" className="error">{diagnostics.error}</p>}
+    {diagnostics.data && <div className="info">
+      <p>{diagnostics.data.readable_papers} of {diagnostics.data.papers} dataset papers have readable PDF text · {diagnostics.data.missing_pdfs} PDFs missing · {diagnostics.data.pdfs_without_text} PDFs need text extraction or OCR.</p>
+      {diagnostics.data.missing_pdfs > 0 && <p>Inventory titles alone cannot provide institutions. Download the missing papers from the <a href={`#/conferences/${editionId}?collection=${collection}`}>conference page</a> before expecting full coverage.</p>}
+      {diagnostics.data.collection_message && <p>{diagnostics.data.collection_message}</p>}
+      {!diagnostics.data.las_ready && <p>AI unavailable: {diagnostics.data.las_message} <a href={`#/settings?collection=${collection}`}>Configure LAS</a>. Local extraction remains available for readable PDFs.</p>}
+      {diagnostics.data.issues.length > 0 && <details><summary>Stored extraction issues</summary>{diagnostics.data.issues.map((issue: Row, i: number) => <p key={i}>{issue.papers} papers: {issue.error || issue.code}</p>)}</details>}
+    </div>}
     <div className="panel compile-authors">
       <h3>Compile the entire conference dataset</h3>
       <p>Extract supported institutions for every paper, then download every author and their paper-time institutions. These downloads include all records, regardless of the table search below.</p>
-      <label className="check-label"><input type="checkbox" checked={useLAS} disabled={running} onChange={e => setUseLAS(e.target.checked)} />Use configured LAS AI for complex affiliations</label>
+      <label className="check-label"><input type="checkbox" checked={useLAS} disabled={running || !diagnostics.data?.las_ready} onChange={e => setUseLAS(e.target.checked)} />Use configured LAS AI for complex affiliations</label>
       <p className="diagnostic-help">AI runs only when selected and you start extraction. Requires a configured model; proposed affiliations still need review. Missing PDFs, text or affiliation evidence remain flagged.</p>
       <div className="toolbar">
-        <button disabled={running} onClick={() => extract("csv")}>Compile all authors CSV</button>
-        <button disabled={running} onClick={() => extract("pdf")}>Compile all authors PDF</button>
+        <button disabled={running || !diagnostics.data || (!diagnostics.data.readable_papers && !diagnostics.data.with_institutions)} onClick={() => extract("csv")}>Compile all authors CSV</button>
+        <button disabled={running || !diagnostics.data || (!diagnostics.data.readable_papers && !diagnostics.data.with_institutions)} onClick={() => extract("pdf")}>Compile all authors PDF</button>
       </div>
     </div>
     <div className="toolbar">
@@ -989,7 +1009,7 @@ function ConferenceAuthors({ editionId }: { editionId: string }) {
           <td>{row.institution || "Not extracted"}</td>
           <td><a href={`#/papers/${row.paper_id}?collection=${collection}`}>{row.paper_title}</a></td>
           <td>{row.status === "missing" ? "Missing institution" : <StatusBadge status={row.status} />}</td>
-          <td>{row.excerpt ? <details><summary>{row.page ? `PDF page ${row.page}` : "Source evidence"}</summary><p>{row.excerpt}</p><p>{row.method}</p><a href={row.source_url} target="_blank" rel="noreferrer">View source</a></details> : `Extraction: ${row.extraction_status.replaceAll("_", " ")}`}</td>
+          <td>{row.excerpt ? <details><summary>{row.page ? `PDF page ${row.page}` : "Source evidence"}</summary><p>{row.excerpt}</p><p>{row.method}</p><a href={row.source_url} target="_blank" rel="noreferrer">View source</a></details> : <>{`Extraction: ${row.extraction_status.replaceAll("_", " ")}`}<p>{row.extraction_error}</p></>}</td>
         </tr>)}
       </tbody></table></div>
       {result.data.total === 0 && <p>No matching author records.</p>}

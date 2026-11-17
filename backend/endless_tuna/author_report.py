@@ -73,6 +73,7 @@ def write_report(stream,records,*,conference,year,collection,q,status,missing_ro
         paragraph('IDs: ',f'paper {row["paper_id"]}; author {row["author_id"]}')
         paragraph('Evidence status: ',row['status']+(' (unverified)' if row['status'] in ('extracted','needs_review') else ''))
         paragraph('Extraction: ',row['extraction_status'])
+        if row['extraction_error']:paragraph('Extraction issue: ',row['extraction_error'])
         if row['excerpt']:
             paragraph('Source: ',f'{row["source_url"]}'+(f' | PDF page {row["page"]}' if row['page'] else ''))
             paragraph('Method: ',row['method'])

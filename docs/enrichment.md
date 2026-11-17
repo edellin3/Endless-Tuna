@@ -76,6 +76,24 @@ The existing ten real NeurIPS PDFs were processed locally with **zero model requ
 
 ## Conference authors and institutions
 
+Before compilation, the view reports dataset papers, available PDFs and readable
+PDF text separately. A full inventory is not a full PDF download. Missing PDFs
+cannot yield institution evidence from titles alone. The latest collection
+message (including source access denials), stored extraction reasons and LAS
+configuration diagnostics appear beside the actions. Unconfigured AI is disabled
+in the UI and rejected by the API before creating paper runs. Opening diagnostics
+does not send model requests. Papers without readable source text get a
+`source_required` result, rather than a misleading model-configuration failure.
+Automatic report download is withheld when there are no supported institutions;
+manual author-roster exports remain available. CSV/PDF include extraction reasons.
+
+Local PDF mapping handles touching numeric labels, contribution symbols, wrapped
+names, typeset letter spacing, inline and suffix institution labels, journal email
+headers and repeated vertical name/institution blocks. A shared institution is
+assigned only when a complete, unambiguous roster is followed by one institution.
+Two unkeyed institutions remain ambiguous. Evidence stays verbatim and no author
+identity/name is changed to make a match.
+
 From **Authors**, enter a conference name and optional year in **Search
 conference name or year**. Choose the stored edition, then click **Compile all
 authors CSV** or **Compile all authors PDF**. Compilation visits every paper in

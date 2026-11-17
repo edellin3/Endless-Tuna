@@ -2,13 +2,15 @@
 import csv
 import io
 import tempfile
-from fastapi import Depends, Query
+from fastapi import Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict
 from . import db
 from .enrichment import enrich_paper, EnrichmentError
 from .exports import safe_cell
+from . import las_settings
+from .las import LASError
 
 
 class ConferenceExtraction(BaseModel):
@@ -22,7 +24,7 @@ WITH members AS (SELECT DISTINCT paper_id FROM paper_editions WHERE edition_id=?
 SELECT p.id paper_id,p.title paper_title,a.id author_id,a.name author,
        au.position author_position,o.name institution,
        COALESCE(aa.status,'missing') status,aa.method,aa.source_url,aa.page,aa.excerpt,
-       COALESCE(es.status,'not_started') extraction_status
+       COALESCE(es.status,'not_started') extraction_status,es.code extraction_code,es.error extraction_error
 FROM members m JOIN papers p ON p.id=m.paper_id
 JOIN authorship au ON au.paper_id=p.id JOIN authors a ON a.id=au.author_id
 LEFT JOIN author_assertions aa ON aa.paper_id=p.id AND aa.author_id=a.id
@@ -44,7 +46,32 @@ def selection(edition, q, status):
     return sql,args
 
 
+def extraction_diagnostics(con,edition):
+    counts=dict(con.execute("""SELECT COUNT(*) papers,
+        COALESCE(SUM(EXISTS(SELECT 1 FROM downloads d WHERE d.paper_id=m.paper_id AND d.status='available' AND pdf_exists(d.path))),0) pdfs,
+        COALESCE(SUM(EXISTS(SELECT 1 FROM downloads d JOIN pdf_pages pp ON pp.download_id=d.id
+          WHERE d.paper_id=m.paper_id AND d.status='available' AND pdf_exists(d.path) AND d.source_url IS NOT NULL AND trim(pp.text)<>'')),0) readable_papers
+        FROM (SELECT DISTINCT paper_id FROM paper_editions WHERE edition_id=?) m""",(edition,)).fetchone())
+    counts['missing_pdfs']=counts['papers']-counts['pdfs']
+    counts['pdfs_without_text']=counts['pdfs']-counts['readable_papers']
+    counts['with_institutions']=con.execute("SELECT COUNT(*) FROM authorship au WHERE au.paper_id IN (SELECT paper_id FROM paper_editions WHERE edition_id=?) AND EXISTS(SELECT 1 FROM author_assertions aa WHERE aa.paper_id=au.paper_id AND aa.author_id=au.author_id AND aa.kind='affiliation' AND aa.status NOT IN ('rejected','superseded'))",(edition,)).fetchone()[0]
+    counts['issues']=[dict(r) for r in con.execute("SELECT es.code,es.error,COUNT(*) papers FROM enrichment_state es WHERE es.paper_id IN (SELECT paper_id FROM paper_editions WHERE edition_id=?) AND es.code IS NOT NULL GROUP BY es.code,es.error ORDER BY papers DESC",(edition,))]
+    job=con.execute('SELECT message FROM jobs WHERE edition_id=? ORDER BY updated DESC LIMIT 1',(edition,)).fetchone()
+    counts['collection_message']=job['message'] if job else ''
+    try:
+        las_settings.configured_client().config.require(model=True)
+        counts.update(las_ready=True,las_message='LAS configuration is present; live access has not been verified.')
+    except LASError as error:counts.update(las_ready=False,las_message=str(error))
+    return counts
+
+
 def register_conference_authors(app, collection, get):
+    @app.get('/api/conferences/{id}/authors/extraction-status')
+    def extraction_status(id:str,c=Depends(collection)):
+        with db.connect(c) as con:
+            get(con,'editions',id)
+            return extraction_diagnostics(con,id)
+
     @app.get('/api/author-conferences')
     def find_conferences(q:str=Query('',max_length=200),page:int=Query(1,ge=1),c=Depends(collection)):
         # Match conference names/years only; paper content is a separate search.
@@ -83,7 +110,7 @@ def register_conference_authors(app, collection, get):
     def export(id:str,q:str=Query('',max_length=200),status:str=Query('',pattern='^(|missing|extracted|needs_review|verified)$'),c=Depends(collection)):
         with db.connect(c) as con:get(con,'editions',id)
         def chunks():
-            columns=['collection','conference_id','conference','year','paper_id','paper_title','author_id','author','author_position','institution','status','method','source_url','page','excerpt','extraction_status']
+            columns=['collection','conference_id','conference','year','paper_id','paper_title','author_id','author','author_position','institution','status','method','source_url','page','excerpt','extraction_status','extraction_code','extraction_error']
             stream=io.StringIO();writer=csv.writer(stream)
             writer.writerow(columns);yield '\ufeff'+stream.getvalue()
             with db.connect(c) as con:
@@ -102,6 +129,9 @@ def register_conference_authors(app, collection, get):
         # Small resumable batches keep old downloads usable without long HTTP requests.
         with db.connect(c) as con:
             get(con,'editions',id)
+            if body.use_las:
+                try:las_settings.configured_client().config.require(model=True)
+                except LASError as error:raise HTTPException(409,'AI extraction cannot start: '+str(error)+' Configure LAS in Settings or turn off AI to run local extraction.') from None
             ids=[r[0] for r in con.execute("""SELECT DISTINCT pe.paper_id FROM paper_editions pe
                 WHERE pe.edition_id=? AND pe.paper_id>? AND (? OR EXISTS(SELECT 1 FROM downloads d
                 WHERE d.paper_id=pe.paper_id AND d.status='available' AND pdf_exists(d.path)))
@@ -111,7 +141,10 @@ def register_conference_authors(app, collection, get):
             try:results.append({'paper_id':pid,**enrich_paper(c,pid,use_las=body.use_las)})
             except EnrichmentError as error:results.append({'paper_id':pid,'status':'failed','error':str(error)})
             except Exception:results.append({'paper_id':pid,'status':'failed','error':'Paper extraction failed. Saved records were preserved; review or retry this paper.'})
-        return {'results':results,'next_after':ids[9] if len(ids)>10 else None}
+        diagnostics=None
+        if len(ids)<=10:
+            with db.connect(c) as con:diagnostics=extraction_diagnostics(con,id)
+        return {'results':results,'next_after':ids[9] if len(ids)>10 else None,'diagnostics':diagnostics}
 
     @app.get('/api/conferences/{id}/authors.pdf')
     def pdf_report(id:str,q:str=Query('',max_length=200),status:str=Query('',pattern='^(|missing|extracted|needs_review|verified)$'),c=Depends(collection)):
