@@ -2238,9 +2238,9 @@ function CollectionWorkflow({ editionId, baseline, initialStatus, sourceURL, con
     } catch(e) { setNotice((e as Error).message); }
     finally { setBusy(false); }
   }
-  async function run(kind: "inventory" | "pdfs") {
+  async function run(kind: "inventory" | "pdfs", publicAlternatives = false) {
     setBusy(true);
-    try { await api(`/conferences/${editionId}/${kind === "pdfs" ? "pdfs" : "collect"}`, {mode:kind,full_collection:all,paper_limit:10});refresh(); }
+    try { await api(`/conferences/${editionId}/${kind === "pdfs" ? "pdfs" : "collect"}`, {mode:kind,full_collection:all,paper_limit:10,...(kind === "pdfs" ? {public_alternatives: publicAlternatives} : {})});refresh(); }
     catch(e) {setNotice((e as Error).message);} finally {setBusy(false);}
   }
   const activeJob = data?.jobs.find((j: Row) => ["queued", "running"].includes(j.status));
@@ -2265,7 +2265,8 @@ function CollectionWorkflow({ editionId, baseline, initialStatus, sourceURL, con
     <details className="collection-tools"><summary>Collection details & tools</summary>
       <p>{latest?.message || "No collection has run yet."}</p><p>{c?.ocr_required ?? 0} PDFs need OCR to become searchable. <a href="#/jobs">View background history</a></p>
       <label className="scope-check"><input type="checkbox" checked={all} onChange={e => setAll(e.target.checked)} /> Process all remaining papers instead of the next 10</label>
-      <div className="toolbar"><button disabled={busy || !!activeJob || !c?.missing_pdfs} onClick={() => run("pdfs")}>Find free PDFs · next 10</button><button disabled={busy || !!activeJob} onClick={() => run("inventory")}>Refresh paper list</button></div>
+      <div className="toolbar"><button disabled={busy || !!activeJob || !c?.missing_pdfs} onClick={() => run("pdfs")}>Find free PDFs · {all ? "all remaining" : "next 10"}</button><button disabled={busy || !!activeJob || !c?.missing_pdfs} onClick={() => run("pdfs", true)}>Find public copies elsewhere · {all ? "all remaining" : "next 10"}</button><button disabled={busy || !!activeJob} onClick={() => run("inventory")}>Refresh paper list</button></div>
+      <p>Public-copy retrieval skips OpenReview and continues through supported free sources. Paper titles and complete author lists must match; uncertain copies go to review.</p>
     </details>
   </section>;
 }

@@ -1,5 +1,37 @@
 # Local lab preparation results
 
+## Public-copy retrieval — 2026-11-17
+
+Inspected and fetched the public WACV 2026 CVF main-track catalog (831 papers),
+CoRL 2024 PMLR proceedings and the documented arXiv API. Added CVF-first WACV
+matching and an explicit durable public-alternatives PDF mode that skips
+OpenReview, respects exact-title/complete-author evidence and pauses other
+denied hosts for the job while continuing other sources. Batched latest-snapshot
+lookup replaces repeated scans when queuing thousands of papers; a full WACV
+PDF job for 823 missing papers queued in 0.11 seconds. The worker now tolerates
+transient SQLite contention rather than shutting down the local app.
+
+Initial real retrieval: four additional WACV PDFs from CVF and five additional
+NeurIPS PDFs from public alternatives. Two WACV titles require review because
+the official program and CVF disagree on complete author names. The missing
+CoRL sample PDF was an official PMLR-linked 47,153,549-byte file, exceeding the
+default 30 MB cap; a bounded local 60 MB setting retrieved it, bringing that
+stored sample to 10/10 PDFs. These counts do not imply full CoRL inventory.
+
+Following the user's explicit full-WACV choice, collected all 831 official
+WACV paper titles/authors, then started a dedicated single-download worker for
+the 823 missing PDFs. The full remaining 9,132-paper NeurIPS public-copy job
+also runs durably. These jobs were still in progress at publication; no complete
+PDF/institution coverage is claimed. Paper parsing and deterministic affiliation
+extraction run as downloads complete. No LAS calls or authenticated IEEE access
+were used. The NCSU-proxied IEEE link is WACV 2026; signed-in browser access
+remains unverified and would need a connected browser session.
+
+Offline verification: 223 backend tests; frontend build; full isolated
+Playwright/Vite acceptance and accessibility checks, including public-copy
+scope controls. Automated source transports remain mocked and separate from
+the observed live retrieval above.
+
 ## Institution extraction repair — 2026-11-17
 
 The stored NeurIPS 2026 compilation had 9,139 `missing_configuration` failures:

@@ -272,6 +272,15 @@ try {
     assert.equal(state.runs.length,0);
     return "Missing PDF/text coverage and configuration are visible before a run; unconfigured AI is rejected once without per-paper failed runs.";
   });
+  await check("Public-copy retrieval exposes explicit next-ten and all-remaining scopes", async () => {
+    await page.goto(base + '/#/conferences/harbor?collection=demo');
+    await page.getByText('Collection details & tools', {exact:true}).click();
+    await page.getByRole('button',{name:'Find public copies elsewhere · next 10',exact:true}).waitFor();
+    await page.getByLabel('Process all remaining papers instead of the next 10').check();
+    await page.getByRole('button',{name:'Find public copies elsewhere · all remaining',exact:true}).waitFor();
+    await page.getByLabel('Process all remaining papers instead of the next 10').uncheck();
+    return 'Public-copy search is a distinct action, defaults to ten, and requires an explicit all-remaining scope choice.';
+  });
   let savedSearch;
   await check("1. Clearly labeled demo and operation without LAS", async () => {
     await page.goto(base + "/#/?collection=demo");

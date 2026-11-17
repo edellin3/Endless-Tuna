@@ -1,5 +1,31 @@
 # Conference collection
 
+## Retrieve public copies elsewhere
+
+On a conference page, open **Collection details & tools → Find public copies
+elsewhere**. This acts on the stored dataset, defaults to ten missing papers,
+and supports the explicit all-remaining scope. The durable job snapshot retains
+`public_alternatives=true` through retries/restarts. This mode skips OpenReview
+requests entirely, so its denied downloads cannot stop other public sources.
+Other hosts returning access/rate-limit denials are paused for the current job;
+other sources and papers continue. A retry starts a new host-attempt budget.
+
+WACV 2026 prioritizes the inspected public CVF main-track catalog at
+`https://openaccess.thecvf.com/WACV2026?day=all`, cached for 24 hours. Only paper
+PDF links under its 2026 main-track path are accepted; supplemental PDFs and
+workshops are excluded. The catalog helps resolve PDFs and never establishes
+conference membership. Automatic acceptance still requires an exact normalized
+title and complete author-name evidence. Different names/initials go to review.
+Unresolved papers continue to documented arXiv queries and OpenAlex public
+open-access locations, including author/institutional repositories. Existing
+PMLR official PDF URLs remain preferred for CoRL. No credentials are sent to
+public collection sources, and no IEEE/NCSU browser session is assumed.
+
+Full PDF job creation reads prior metadata snapshots in one query, preserving
+the latest durable record for each paper. The worker tolerates transient SQLite
+writer contention rather than exiting the supervisor. Public-source matching,
+local parsing and institution extraction do not call LAS.
+
 **Current analyst workflow:** paste a link and click **Collect papers**. Title collection and free-PDF retrieval proceed automatically, with counts and pause/resume on one conference page. Choose Entire conference for full scope; ten papers remains the default. The technical/manual pipeline below remains available in secondary tools. See [automatic collection](automatic-collection.md).
 
 The pipeline runs in the separate SQLite-backed worker. It does not invoke LAS. The existing centralized LAS client is used only by explicit model actions.

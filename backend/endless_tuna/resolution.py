@@ -6,7 +6,8 @@ import re
 import time
 import unicodedata
 from typing import Protocol
-from urllib.parse import urlencode, urlsplit, quote
+from urllib.parse import urlencode, urlsplit, quote, urljoin
+from bs4 import BeautifulSoup
 from xml.etree import ElementTree as ET
 from dataclasses import dataclass, asdict
 from collections import Counter
@@ -125,13 +126,22 @@ def resolve(record,collection,fetch=fetch_bytes,*,wide=False,excluded_urls=()):
         validate_url(record.pdf_url,resolve=False)
         return Candidate(record.pdf_url,record.title,[a.name for a in record.authors],record.version),[],None
     errors=[]
+    with storage.connect(collection) as con:
+        rejected={r['url'] for r in con.execute("SELECT c.url FROM pdf_candidates c JOIN papers p ON p.id=c.paper_id WHERE p.canonical_url=? AND c.status='rejected'",(record.source_url,))}
+    rejected.update(excluded_urls)
+    cvf_review=[]
+    if wide and record.year==2026 and urlsplit(record.source_url).hostname=='wacv.thecvf.com':
+        try:
+            cvf=[c for c in cvf_candidates(record,collection,fetch) if c.url not in rejected]
+            strong_cvf=[c for c in cvf if strong_match(record,c)]
+            if len(strong_cvf)==1:return strong_cvf[0],[],None
+            cvf_review=cvf
+        except CollectionError as error:errors.append('CVF lookup: '+str(error))
     try:
         candidates=arxiv_candidates(record,collection,fetch)
     except CollectionError as error:
         errors.append(str(error));candidates=[]
-    with storage.connect(collection) as con:
-        rejected={r['url'] for r in con.execute("SELECT c.url FROM pdf_candidates c JOIN papers p ON p.id=c.paper_id WHERE p.canonical_url=? AND c.status='rejected'",(record.source_url,))}
-    rejected.update(excluded_urls)
+    candidates=cvf_review+candidates
     candidates=[c for c in candidates if c.url not in rejected]
     strong=[c for c in candidates if strong_match(record,c)]
     if len(strong)==1:
@@ -153,6 +163,32 @@ def resolve(record,collection,fetch=fetch_bytes,*,wide=False,excluded_urls=()):
             if rows:return None,rows,'General web-search candidates require analyst confirmation.'
         except CollectionError as error:errors.append(str(error))
     return None,[], '; '.join(errors) or 'No accessible PDF resolved. Web search '+('returned no candidates.' if os.getenv('TUNA_SEARCH_ENDPOINT') else 'is not configured; use manual search or supply a PDF URL.')
+
+
+def cvf_candidates(record,collection,fetch=fetch_bytes):
+    """Inspected WACV 2026 main-track catalog; PDF discovery, never membership."""
+    key='cvf:WACV2026:v1';source='https://openaccess.thecvf.com/WACV2026?day=all'
+    with storage.connect(collection) as con:cached=con.execute('SELECT * FROM resolution_cache WHERE key=?',(key,)).fetchone()
+    if cached and cached['created']>time.time()-86400:
+        candidates=[Candidate(**r) for r in json.loads(cached['result'])]
+    else:
+        raw,final=fetch(source,limit=4_000_000)
+        if urlsplit(final).hostname!='openaccess.thecvf.com' or urlsplit(final).path!='/WACV2026':raise CollectionError('CVF redirected outside the inspected main-track catalog.')
+        soup=BeautifulSoup(raw,'html.parser');candidates=[]
+        for entry in soup.select('dt.ptitle'):
+            title=entry.select_one('a[href]');people=entry.find_next_sibling('dd')
+            links=people.find_next_sibling('dd') if people else None
+            if not title or people is None or links is None:raise CollectionError('CVF catalog layout changed; missing title, authors or PDF links.')
+            names=[a.get('value','').strip() for a in people.select('input[name=query_author]')]
+            urls=[urljoin(source,a['href']) for a in links.select('a[href]') if a.get_text(strip=True)=='pdf']
+            if not names or not all(names) or len(urls)!=1:raise CollectionError('CVF catalog has incomplete authors or ambiguous PDF links.')
+            pdf=urls[0];u=urlsplit(pdf)
+            if u.hostname!='openaccess.thecvf.com' or not u.path.startswith('/content/WACV2026/papers/') or not u.path.endswith('_WACV_2026_paper.pdf'):raise CollectionError('CVF PDF link is outside the inspected main-track paper path.')
+            validate_url(pdf,resolve=False)
+            candidates.append(Candidate(pdf,title.get_text(' ',strip=True),names,'cvf:WACV2026',urljoin(source,title['href'])))
+        if not candidates or len(candidates)>10000:raise CollectionError('CVF returned an empty or oversized paper catalog.')
+        with storage.connect(collection) as con:con.execute('INSERT INTO resolution_cache VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET result=excluded.result,created=excluded.created',(key,json.dumps([asdict(c) for c in candidates]),time.time()))
+    return [c for c in candidates if normalize(c.title)==normalize(record.title)]
 
 
 def openalex_candidates(record,collection,fetch=fetch_bytes):

@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 import json
 import signal
+import sqlite3
 import threading
 import time
 import uuid
@@ -47,11 +48,23 @@ def paper_stage(collection,jid,token,pid,stage,metadata=None):
 def process_paper(collection,job,token,item,adapter):
     jid,pid=job['id'],item['paper_id']
     def fetch(url, **kwargs):
+        host=urlsplit(url).hostname
+        if job.get('public_alternatives'):
+            if host in ('openreview.net','api2.openreview.net'):
+                raise CollectionError('OpenReview skipped: this job searches public copies elsewhere.')
+            if host in job.get('_denied_hosts',set()):
+                raise CollectionError('Public-copy source paused for this job after an access/rate-limit denial: '+host)
         if job['kind'] in ('pdfs','automatic'):
             with storage.connect(collection) as con:owned(con,jid,token)
-        return fetch_bytes(url, **kwargs)
+        try:return fetch_bytes(url, **kwargs)
+        except CollectionError as error:
+            if job.get('public_alternatives') and any('HTTP '+str(code) in str(error) for code in (401,403,429)):
+                job.setdefault('_denied_hosts',set()).add(host)
+            raise
     try:
         record=Metadata.model_validate_json(item['metadata'])
+        if job.get('public_alternatives') and urlsplit(record.pdf_url or '').hostname in ('openreview.net','api2.openreview.net'):
+            record=record.model_copy(update={'pdf_url':None})
         paper_stage(collection,jid,token,pid,'resolve')
         if record.detail_pending:
             try:record=adapter.hydrate(record,fetch)
@@ -179,6 +192,8 @@ def tick(collection,job_id=None,shutdown=None):
             with storage.connect(collection) as con:
                 owned(con,jid,token)
                 con.execute('INSERT INTO job_payloads VALUES(?,?)',(jid,json.dumps(payload)))
+        job['public_alternatives']=bool(payload.get('public_alternatives',False))
+        job['_denied_hosts']=set()
         with storage.connect(collection) as con:
             owned(con,jid,token)
             for index,record in enumerate(inventory.records):
@@ -215,7 +230,7 @@ def tick(collection,job_id=None,shutdown=None):
                 with storage.connect(collection) as con:owned(con,jid,token)
                 futures=[executor.submit(process_paper,collection,job,token,item,adapter) for item in items[offset:offset+concurrency]]
                 for future in futures:future.result()
-                if getattr(adapter,'stop_on_repeated_pdf_denial',False):
+                if getattr(adapter,'stop_on_repeated_pdf_denial',False) and not job.get('public_alternatives'):
                     with storage.connect(collection) as con:
                         for item in items[offset:offset+concurrency]:
                             outcome=con.execute('SELECT status,error,metadata FROM job_papers WHERE job_id=? AND paper_id=?',(jid,item['paper_id'])).fetchone()
@@ -263,7 +278,12 @@ def main():
     while not shutdown.is_set():
         for c in ([args.collection] if args.collection else ['demo','real']):
             if shutdown.is_set():break
-            tick(c,args.job,shutdown)
+            try:tick(c,args.job,shutdown)
+            except sqlite3.OperationalError as error:
+                if getattr(error,'sqlite_errorcode',None) not in (sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED):raise
+                # Another short writer may be queuing work. Keep the supervisor
+                # alive; any already-claimed lease remains recoverable.
+                shutdown.wait(.5)
         if args.once:break
         shutdown.wait(1)
 
