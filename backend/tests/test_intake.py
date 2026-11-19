@@ -167,6 +167,8 @@ def test_blocked_official_pdf_falls_through_to_open_access_copy(client,monkeypat
         if url.startswith(VOLUME):return DETAIL,url
         if url=='https://files.example/fixture.pdf':raise CollectionError('Source returned HTTP 403.')
         if 'export.arxiv.org' in url:return b'<feed xmlns="http://www.w3.org/2005/Atom"/>',url
+        if url.startswith('https://api.openalex.org/works/doi:'):
+            raise CollectionError('Source returned HTTP 404.')
         if url.startswith('https://api.openalex.org/works?'):
             return oa_payload(title=record_title,names=('Zed Fixture','Alex Fixture')),url
         if url=='https://repository.example/paper.pdf':return raw,url

@@ -176,6 +176,7 @@ def test_full_inventory_does_not_claim_full_pdf_coverage(client,monkeypatch):
         if url.endswith('fixture25b.html'):return DETAIL.replace(b'fixture.pdf',b'missing.pdf').replace(b'Fictional sample robot',b'Fictional sensor study'),url
         if url=='https://files.example/fixture.pdf':return raw,url
         if url=='https://files.example/missing.pdf':raise CollectionError('Source returned HTTP 403.')
+        if url.startswith('https://api.openalex.org/works/doi:'):raise CollectionError('Source returned HTTP 404.')
         if url.startswith('https://export.arxiv.org/api/query'):return b'<feed xmlns="http://www.w3.org/2005/Atom"/>',url
         raise AssertionError('Unexpected request: '+url)
     monkeypatch.setattr(worker,'fetch_bytes',fetch)
