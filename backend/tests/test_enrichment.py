@@ -70,6 +70,82 @@ def test_marker_mapping_multiple_affiliations(session):
     assert len([a for a in data if a['author_id']=='a1'])==2
 
 
+@pytest.mark.parametrize('text',[
+    'Mira Chen[10,12]  Alex Rivera[12]\n[10] Tidal Research Institute\n[12] Northstar Lab',
+    'Mira Chen¹⁰,¹²  Alex Rivera¹²\n¹⁰ Tidal Research Institute\n¹² Northstar Lab',
+])
+def test_multi_digit_and_superscript_institution_markers(session,text):
+    pages(text)
+    result=session.post('/api/papers/harbor-0/enrich',json={}).json()
+    assert result['assertions_added']==3
+    data=session.get('/api/papers/harbor-0/enrichment').json()['assertions']
+    assert {a['value'] for a in data if a['author_id']=='a1'}=={'Tidal Research Institute','Northstar Lab'}
+    assert {a['value'] for a in data if a['author_id']=='a2'}=={'Northstar Lab'}
+
+
+@pytest.mark.parametrize('text',[
+    'Mira Chen1,2* Alex Rivera2†\n1Tidal Research Institute\n2Northstar Lab\nAbstract: Fictional example.',
+    'Mira Chen¹,²* Alex Rivera²†\n¹Tidal Research Institute\n²Northstar Lab\nAbstract\nFictional example.',
+])
+def test_tight_numbered_labels_and_contribution_symbols(session,text):
+    pages(text)
+    result=session.post('/api/papers/harbor-0/enrich',json={}).json()
+    assert result['assertions_added']==3 and result['flagged_claims']==0
+    claims=session.get('/api/papers/harbor-0/enrichment').json()['assertions']
+    assert {a['value'] for a in claims if a['author_id']=='a1'}=={'Tidal Research Institute','Northstar Lab'}
+    assert {a['value'] for a in claims if a['author_id']=='a2'}=={'Northstar Lab'}
+
+
+def test_inline_labels_support_named_company_without_copying_authors(session):
+    pages('Mira Chen1 Alex Rivera2\n1Tidal University 2CoastAI\nAbstract\nFictional example.')
+    result=session.post('/api/papers/harbor-0/enrich',json={}).json()
+    assert result['assertions_added']==2 and result['flagged_claims']==0
+    claims=session.get('/api/papers/harbor-0/enrichment').json()['assertions']
+    assert {(a['author_id'],a['value']) for a in claims}=={('a1','Tidal University'),('a2','CoastAI')}
+
+
+def test_complete_unmarked_roster_shares_single_explicit_institution(session):
+    pages('Fictional paper\nMira Chen*, Alex Rivera\nTidal University\nAbstract: Example.\nOther University appears in the body.')
+    result=session.post('/api/papers/harbor-0/enrich',json={}).json()
+    assert result['assertions_added']==2 and result['flagged_claims']==0
+    claims=session.get('/api/papers/harbor-0/enrichment').json()['assertions']
+    assert {(a['author_id'],a['value']) for a in claims}=={('a1','Tidal University'),('a2','Tidal University')}
+
+
+@pytest.mark.parametrize('text',[
+    'Mira Chen, Alex Rivera\nTidal University\nNorthstar University\nAbstract\nExample.',
+    'Mira Chen, Someone Else\nTidal University\nAbstract\nExample.',
+    'Mira Chen1 Alex Rivera1\n1 Equal contribution\nAbstract\n1 Introduction',
+])
+def test_ambiguous_unkeyed_or_noninstitution_headers_stay_empty(session,text):
+    pages(text)
+    result=session.post('/api/papers/harbor-0/enrich',json={}).json()
+    assert result['assertions_added']==0
+
+
+@pytest.mark.parametrize('text,expected',[
+    ('Mira Chen*1 Alex\nRivera*2\n1Tidal University, 2[CoastAI] Research\nAbstract: Example.',{'a1':'Tidal University','a2':'[CoastAI] Research'}),
+    ('Mira Chen1 Alex Rivera2\nTidal University1 Northstar University2\nAbstract\nExample.',{'a1':'Tidal University','a2':'Northstar University'}),
+    ('Mira Chen\nNorthstar\nAlex Rivera\nTidalCo\nAbstract: Example.',{'a1':'Northstar','a2':'TidalCo'}),
+])
+def test_wrapped_author_names_suffix_labels_and_vertical_brand_names(session,text,expected):
+    pages(text)
+    result=session.post('/api/papers/harbor-0/enrich',json={}).json()
+    assert result['assertions_added']==2 and result['flagged_claims']==0
+    claims=session.get('/api/papers/harbor-0/enrichment').json()['assertions']
+    assert {a['author_id']:a['value'] for a in claims}==expected
+
+
+def test_email_name_lines_and_typeset_letter_spacing_preserve_original_roster(session):
+    pages('M ira Chen* mira@example.org\nDepartment of Computing\nTidal University\nAlex Rivera alex@example.org\nSchool of Computing\nNorthstar University\nAbstract\nExample.')
+    result=session.post('/api/papers/harbor-0/enrich',json={}).json()
+    assert result['assertions_added']==2 and result['flagged_claims']==0
+    claims=session.get('/api/papers/harbor-0/enrichment').json()['assertions']
+    assert {a['author_id']:a['value'] for a in claims}=={'a1':'Tidal University','a2':'Northstar University'}
+    assert 'M ira Chen' in next(a for a in claims if a['author_id']=='a1')['excerpt']
+    assert session.get('/api/authors/a1').json()['name']=='Mira Chen'
+
+
 def test_deterministic_metadata_organizations_have_provenance(session):
     with db.connect() as con:
         record=Metadata(title='Fictional metadata source',source_url='https://example.org/meta-paper',authors=[Person(name='Metadata Author',organizations=['First Institute','Second University'])])

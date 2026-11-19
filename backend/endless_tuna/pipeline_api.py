@@ -22,6 +22,7 @@ class CollectionRequest(BaseModel):
 class PDFCollectionRequest(BaseModel):
     paper_limit:int=Field(default=10,ge=1,le=100)
     full_collection:bool=False
+    public_alternatives:bool=False
 
 
 class CSVImport(BaseModel):
@@ -83,12 +84,18 @@ def register_pipeline(app,collection,get):
             rows=list(con.execute("SELECT DISTINCT p.* FROM papers p JOIN paper_editions m ON m.paper_id=p.id WHERE m.edition_id=? AND NOT EXISTS(SELECT 1 FROM downloads d WHERE d.paper_id=p.id AND d.status='available' AND pdf_exists(d.path)=1) ORDER BY p.id",(id,)))
             if not rows:raise HTTPException(409,'There are no missing PDFs to search for. Collect a paper list first, or open the PDFs already available.')
             if not body.full_collection:rows=rows[:body.paper_limit]
+            snapshots={r['paper_id']:r['metadata'] for r in con.execute('''
+                SELECT paper_id,metadata FROM (
+                  SELECT jp.paper_id,jp.metadata,ROW_NUMBER() OVER (
+                    PARTITION BY jp.paper_id ORDER BY jp.updated DESC,j.rowid DESC) rank
+                  FROM job_papers jp JOIN jobs j ON j.id=jp.job_id WHERE j.edition_id=?)
+                WHERE rank=1''',(id,))}
             track=con.execute('SELECT id FROM tracks WHERE edition_id=? ORDER BY id LIMIT 1',(id,)).fetchone()['id']
-            jid=queue(con,id,track,None if body.full_collection else body.paper_limit,{'records':[],'official_count':edition['official_count'],'url':edition['source_url']})
+            jid=queue(con,id,track,None if body.full_collection else body.paper_limit,{'records':[],'official_count':edition['official_count'],'url':edition['source_url'],'public_alternatives':body.public_alternatives})
             con.execute("UPDATE jobs SET kind='pdfs',message='Finding free PDFs for the saved paper list' WHERE id=?",(jid,))
             for n,paper in enumerate(rows):
-                prior=con.execute('SELECT jp.metadata FROM job_papers jp JOIN jobs j ON j.id=jp.job_id WHERE jp.paper_id=? AND j.edition_id=? ORDER BY jp.updated DESC LIMIT 1',(paper['id'],id)).fetchone()
-                if prior:record=Metadata.model_validate_json(prior['metadata'])
+                prior=snapshots.get(paper['id'])
+                if prior:record=Metadata.model_validate_json(prior)
                 else:
                     people=[Person(name=r['name']) for r in con.execute('SELECT a.name FROM authors a JOIN authorship au ON a.id=au.author_id WHERE au.paper_id=? ORDER BY au.position',(paper['id'],))]
                     source=con.execute('SELECT official_url FROM paper_editions WHERE paper_id=? AND edition_id=? LIMIT 1',(paper['id'],id)).fetchone()['official_url']

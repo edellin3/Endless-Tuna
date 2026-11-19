@@ -22,6 +22,22 @@ def norm(text):return ' '.join(text.casefold().split())
 def contains(text,value):return bool(re.search(r'(?<!\w)'+re.escape(norm(value))+r'(?!\w)',norm(text)))
 
 
+def author_pattern(name):
+    # pypdf may split a typeset name ("M ira") or wrap it onto a new line.
+    # Match the same letters only; never drop initials, add aliases or reorder.
+    return r'\s+'.join(r'\s*'.join(re.escape(char) for char in word) for word in name.split())
+
+
+def contains_author(text,name):
+    # PDF author names often touch numeric/superscript affiliation markers.
+    # Keep a trailing word boundary so a shorter same-name prefix cannot match.
+    return bool(re.search(r'(?<!\w)'+author_pattern(norm(name))+r'[0-9¹²³⁴⁵⁶⁷⁸⁹⁰]*(?!\w)',norm(text)))
+
+
+def contains_institution(text,name):
+    return bool(re.search(r'(?<!\w)[0-9¹²³⁴⁵⁶⁷⁸⁹⁰]*'+re.escape(norm(name))+r'[0-9¹²³⁴⁵⁶⁷⁸⁹⁰]*(?!\w)',norm(text)))
+
+
 def orcid_url(value):
     raw=value.removeprefix('https://orcid.org/').removeprefix('http://orcid.org/')
     if not re.fullmatch(r'\d{4}-\d{4}-\d{4}-\d{3}[\dX]',raw):raise EnrichmentError('Use a full, checksum-valid ORCID identifier.')
@@ -108,7 +124,7 @@ def validate_assertion(con,aid,data,method):
     if data.kind in ('affiliation','current_affiliation'):
         org=data.organization or data.value
         if norm(org)!=norm(data.value):raise EnrichmentError('Affiliation value must be the stated organization, without unsupported normalization.')
-        if not contains(quote,author['name']) or not contains(quote,org):raise EnrichmentError('Affiliation evidence must include this author and the stated organization.')
+        if not contains_author(quote,author['name']) or not contains_institution(quote,org):raise EnrichmentError('Affiliation evidence must include this author and the stated organization.')
     elif data.kind in ('organization_country','organization_city'):
         org=data.organization
         if not org or not contains(quote,org) or not contains(quote.replace(norm(org),''),data.value):raise EnrichmentError('Location must be explicitly supported by the organization excerpt; do not infer it from a name.')
@@ -161,10 +177,120 @@ def metadata_assertions(con,pid,record):
 ORG=re.compile(r'\b(university|institute|laborator(?:y|ies)|lab|college|school|centre|center|research|corporation|inc\.?|department|academy)\b',re.I)
 
 
+def paper_header(text):
+    abstract=re.search(r'(?im)^\s*abstract\b\s*[:.\u2014-]?',text)
+    return text[:abstract.start()] if abstract else text[:2000]
+
+
+def header_claims(authors,page):
+    """Explicit numbered labels or a complete roster with one shared institution."""
+    if page['page']!=1:return []
+    text=page['text'];header=paper_header(text);claims=[]
+    names=Counter(norm(a['name']) for a in authors)
+    digits='¹²³⁴⁵⁶⁷⁸⁹⁰';translate=str.maketrans(digits,'1234567890')
+    numeric=r'[1-9][0-9]?(?:\s*,\s*[1-9][0-9]?)*'
+    superscript='['+digits+']+(?:\\s*,\\s*['+digits+']+)*'
+    markers={};locations=[]
+    for author in authors:
+        if names[norm(author['name'])]!=1:continue
+        name=author_pattern(author['name'])
+        found=re.search(r'(?<!\w)'+name+r'(?![A-Za-z])',header,re.I)
+        if found:locations.append((author,found))
+        marker=re.search(r'(?<!\w)'+name+r'\s*[*∗†‡]?\s*(?:\[('+numeric+r')\]|('+superscript+r')|('+numeric+r'))(?=[*∗†‡\s,]|$)',header,re.I)
+        if marker:markers[author['position']]=(author,marker,set(re.findall(r'[1-9][0-9]?',(marker[1] or marker[2] or marker[3]).translate(translate))))
+    # Labels may touch organization text and multiple labels may share a line.
+    last_marker_end=max((marker.end() for _,marker,_ in markers.values()),default=0)
+    label=re.compile(r'(?m)(?<!\w)(?:\[([1-9][0-9]?)\]|(['+digits+r']+)|([1-9][0-9]?))(?=[A-Z\s.)\[])\s*[.)]?\s*')
+    for line in re.finditer(r'[^\n]+',text):
+        labels=list(label.finditer(line[0]))
+        for i,match in enumerate(labels):
+            if line.start()+match.start()<last_marker_end:continue
+            code=(match[1] or match[2] or match[3]).translate(translate)
+            end=labels[i+1].start() if i+1<len(labels) else len(line[0])
+            org=line[0][match.end():end].strip().strip(',; ')
+            in_header=line.start()<len(header)
+            bare_brand=in_header and bool(re.fullmatch(r'[A-Z\[][A-Za-z0-9 &.\[\]\u2019\u0027-]{1,100}',org))
+            excluded=re.search(r'\b(equal|contribut|correspond|introduction|abstract|related work|conclusion|figure|table|copyright|permission|work done)\w*\b',org,re.I)
+            if not org or len(org)>300 or '@' in org or excluded or not (ORG.search(org) or bare_brand):continue
+            if any(contains_author(org,a['name']) for a in authors):continue
+            for author,marker,codes in markers.values():
+                if code not in codes:continue
+                start=min(marker.start(),line.start()+match.start());stop=max(marker.end(),line.start()+end)
+                excerpt=text[start:stop].strip()
+                if len(excerpt)<=6000:
+                    claims.append(Claim(author_position=author['position'],author_name=author['name'],kind='affiliation',organization=org,value=org,excerpt=excerpt,page=1))
+    # Some first pages put numbers after institutions, rather than before them.
+    for line in re.finditer(r'[^\n]+',header):
+        if label.match(line[0].lstrip()):continue
+        for suffix in re.finditer(r'(?:^|\s)([^\n0-9¹²³⁴⁵⁶⁷⁸⁹⁰]{3,300}?)([1-9][0-9]?|['+digits+r']+)(?=\s|$)',line[0]):
+            org=suffix[1].strip();code=suffix[2].translate(translate)
+            if not ORG.search(org) or any(contains_author(org,a['name']) for a in authors):continue
+            for author,marker,codes in markers.values():
+                if code not in codes:continue
+                excerpt=header[min(marker.start(),line.start()+suffix.start()):max(marker.end(),line.start()+suffix.end())].strip()
+                if len(excerpt)<=6000:claims.append(Claim(author_position=author['position'],author_name=author['name'],kind='affiliation',organization=org,value=org,excerpt=excerpt,page=1))
+    # Repeated vertical author/institution blocks also state bare institution
+    # names (e.g. "Northstar") without requiring a word such as "University".
+    vertical=[]
+    for author in authors:
+        if names[norm(author['name'])]!=1:continue
+        name=r'\s+'.join(re.escape(word) for word in author['name'].split())
+        block=re.search(r'(?m)^\s*'+name+r'[*∗†‡]?\s*\n([A-Z][A-Za-z &.,\u2019\u0027-]{1,100})\s*$',header)
+        if block and not re.search(r'\b(submitted|revised|accepted|abstract|copyright|equal|contribution|corresponding|orcid|editor)\b',block[1],re.I) and not any(contains_author(block[1],a['name']) for a in authors):vertical.append((author,block))
+    if len(vertical)>=2:
+        for author,block in vertical:
+            org=block[1].strip();excerpt=block[0].strip()
+            claims.append(Claim(author_position=author['position'],author_name=author['name'],kind='affiliation',organization=org,value=org,excerpt=excerpt,page=1))
+    # Journal layouts put email on the name line, followed by department and
+    # university lines. The block must start with an exact roster name.
+    for author in authors:
+        if names[norm(author['name'])]!=1:continue
+        block=re.search(r'(?m)^\s*'+author_pattern(author['name'])+r'[*∗†‡]?[^\S\n]+[^\s@]+@[^\s@]+[^\S\n]*\n',header,re.I)
+        if not block:continue
+        offset=block.end();orgs=[]
+        for line in header[offset:].splitlines()[:4]:
+            offset+=len(line)+1;org=line.strip()
+            if not ORG.search(org) or '@' in org or len(org)>300:break
+            orgs.append((org,offset))
+        primary=[entry for entry in orgs if re.search(r'\b(university|institute|laborator(?:y|ies)|lab|college|centre|center|academy)\b',entry[0],re.I)]
+        chosen=primary or orgs
+        if len(chosen)==1:
+            org,stop=chosen[0];excerpt=header[block.start():min(stop,len(header))].strip()
+            if len(excerpt)<=6000:claims.append(Claim(author_position=author['position'],author_name=author['name'],kind='affiliation',organization=org,value=org,excerpt=excerpt,page=1))
+    # One common unnumbered institution is shared only when the entire original
+    # roster forms an otherwise empty author block. Never distribute two unkeyed
+    # institutions among names or use a nearest-name heuristic.
+    if authors and len(locations)==len(authors) and not markers:
+        start=min(m.start() for _,m in locations);end=max(m.end() for _,m in locations)
+        remainder=header[start:end]
+        for author,_ in sorted(locations,key=lambda pair:len(pair[0]['name']),reverse=True):
+            remainder=re.sub(r'\s+'.join(re.escape(word) for word in author['name'].split()),'',remainder,flags=re.I)
+        remainder=re.sub(r'\band\b','',remainder,flags=re.I)
+        if not re.sub(r'[\s,;*&∗†‡]+','',remainder):
+            tail=header[end:];lines=tail.splitlines();orgs=[];offset=end
+            for line in lines[:8]:
+                offset+=len(line)+1
+                clean=line.strip().strip('*∗†‡,; ')
+                if not clean:continue
+                if '@' in clean or 'http' in clean:break
+                if ORG.search(clean):orgs.append((clean,offset))
+                elif orgs:break
+                else:break
+            primary=[entry for entry in orgs if re.search(r'\b(university|institute|laborator(?:y|ies)|lab|college|centre|center|academy)\b',entry[0],re.I)]
+            chosen=primary or orgs
+            if len(chosen)==1 and len(chosen[0][0])<=300:
+                org,stop=chosen[0];excerpt=header[start:min(stop,len(header))].strip()
+                if len(excerpt)<=6000:
+                    for author,_ in locations:
+                        claims.append(Claim(author_position=author['position'],author_name=author['name'],kind='affiliation',organization=org,value=org,excerpt=excerpt,page=1))
+    return claims
+
+
 def deterministic_claims(authors,pages):
     claims=[];names=Counter(norm(a['name']) for a in authors)
     for page in pages:
         text=page['text'];lines=text.splitlines()
+        claims.extend(header_claims(authors,page))
         for author in authors:
             if names[norm(author['name'])]>1:continue  # identical names do not establish a mapping
             name=re.escape(author['name'])
@@ -182,7 +308,7 @@ def deterministic_claims(authors,pages):
                     except EnrichmentError:continue
                     if len(line.strip())<=6000:claims.append(Claim(author_position=author['position'],author_name=author['name'],kind='orcid',value=value,excerpt=line.strip(),page=page['page']))
             # Exact one-author vertical blocks, bounded by the first-page abstract.
-            header=text[:re.search(r'(?im)^\s*abstract\s*$',text).start()] if re.search(r'(?im)^\s*abstract\s*$',text) else text[:2000]
+            header=paper_header(text)
             if page['page']==1:
                 block=re.search(r'(?m)^\s*'+name+r'[*∗†‡]?\s*\n([^\n]{3,300})',header,re.I)
                 if block and ORG.search(block[1]) and '@' not in block[1] and len(block[0].strip())<=6000:
@@ -195,19 +321,9 @@ def deterministic_claims(authors,pages):
                         start=min(symbol.start(),footnote.start());end=max(symbol.end(),footnote.end());excerpt=text[start:end].strip()
                         if ORG.search(org) and '@' not in org and len(org)<=300 and len(excerpt)<=6000:
                             claims.append(Claim(author_position=author['position'],author_name=author['name'],kind='affiliation',organization=org,value=org,excerpt=excerpt,page=page['page']))
-            # Explicit numeric affiliation markers, never nearest-name guesses.
-            if page['page']!=1:continue
-            marker=re.search(name+r'\s*(?:\[([1-9](?:\s*,\s*[1-9])*)\]|([¹²³⁴⁵⁶⁷⁸⁹]+)|([1-9](?:,[1-9])*))(?=\s|,|$)',header,re.I)
-            if not marker:continue
-            markers=list(marker[2].translate(str.maketrans('¹²³⁴⁵⁶⁷⁸⁹','123456789'))) if marker[2] else re.findall('[1-9]',marker[1] or marker[3])
-            for code in markers:
-                for orgline in re.finditer(r'(?m)^\s*'+code+r'[ .)\t]+([^\n]{3,300})$',text):
-                    org=orgline[1].strip()
-                    if not ORG.search(org):continue
-                    start=min(marker.start(),orgline.start());end=max(marker.end(),orgline.end())
-                    excerpt=text[start:end].strip()
-                    if len(excerpt)<=6000:claims.append(Claim(author_position=author['position'],author_name=author['name'],kind='affiliation',organization=org,value=org,excerpt=excerpt,page=page['page']))
-    return claims
+    unique={}
+    for claim in claims:unique.setdefault((claim.author_position,claim.kind,claim.value,claim.page),claim)
+    return list(unique.values())
 
 
 def apply_claims(con,pid,authors,claims,pages,method):
@@ -248,9 +364,8 @@ def enrich_paper(collection,pid,use_las=False):
         with storage.connect(collection) as con:
             mapped={r[0] for r in con.execute("SELECT DISTINCT author_id FROM author_assertions WHERE paper_id=? AND kind='affiliation' AND status NOT IN ('rejected','superseded')",(pid,))}
         needs_language=any(a['id'] not in mapped for a in authors) or any(re.search(r'\b(country|city|ORCID)\b',p['text'],re.I) for p in pages)
-        if use_las and needs_language:
+        if use_las and needs_language and pages:
             client=las_settings.configured_client();client.config.require(model=True)
-            if not pages:raise LASError('source_required','Parsed paper text is required; no affiliation evidence was invented.',retryable=True)
             roster=[];length=0
             for author in authors:
                 entry={'position':author['position'],'name':author['name']}
@@ -279,7 +394,9 @@ def enrich_paper(collection,pid,use_las=False):
         state='needs_review' if flagged or known and unmapped else 'extracted' if known else 'no_evidence'
         if flagged:code='unsupported_or_bounded_claims';error='Some claims lacked support or exceeded the bounded passage/author budget. Review evidence or retry targeted passages.'
         elif known and unmapped:code='partial_affiliation_evidence';error=f'Affiliation evidence remains unavailable for {unmapped} original author records. Existing supported assertions were preserved.'
-        if not known and not error:code='evidence_missing';error='No unambiguous affiliation mapping found. Review the paper or explicitly try LAS; unsupported fields remain empty.'
+        if not known and not error:
+            code='evidence_missing' if pages else 'source_required'
+            error='No unambiguous affiliation mapping found. Review the paper or explicitly try LAS; unsupported fields remain empty.' if pages else 'No readable, sourced PDF text is available. Download and index this paper first; AI cannot extract institutions from inventory titles alone.'
     except LASError as failure:
         state='failed';code=failure.code;error=str(failure);retryable=True
     except Exception:

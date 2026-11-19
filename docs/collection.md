@@ -1,5 +1,31 @@
 # Conference collection
 
+## Retrieve public copies elsewhere
+
+On a conference page, open **Collection details & tools → Find public copies
+elsewhere**. This acts on the stored dataset, defaults to ten missing papers,
+and supports the explicit all-remaining scope. The durable job snapshot retains
+`public_alternatives=true` through retries/restarts. This mode skips OpenReview
+requests entirely, so its denied downloads cannot stop other public sources.
+Other hosts returning access/rate-limit denials are paused for the current job;
+other sources and papers continue. A retry starts a new host-attempt budget.
+
+WACV 2026 prioritizes the inspected public CVF main-track catalog at
+`https://openaccess.thecvf.com/WACV2026?day=all`, cached for 24 hours. Only paper
+PDF links under its 2026 main-track path are accepted; supplemental PDFs and
+workshops are excluded. The catalog helps resolve PDFs and never establishes
+conference membership. Automatic acceptance still requires an exact normalized
+title and complete author-name evidence. Different names/initials go to review.
+Unresolved papers continue to stored identifier lookups and then title searches
+in arXiv and OpenAlex, including public author and institutional repositories. Existing
+PMLR official PDF URLs remain preferred for CoRL. No credentials are sent to
+public collection sources, and no IEEE/NCSU browser session is assumed.
+
+Full PDF job creation reads prior metadata snapshots in one query, preserving
+the latest durable record for each paper. The worker tolerates transient SQLite
+writer contention rather than exiting the supervisor. Public-source matching,
+local parsing and institution extraction do not call LAS.
+
 **Current analyst workflow:** paste a link and click **Collect papers**. Title collection and free-PDF retrieval proceed automatically, with counts and pause/resume on one conference page. Choose Entire conference for full scope; ten papers remains the default. The technical/manual pipeline below remains available in secondary tools. See [automatic collection](automatic-collection.md).
 
 The pipeline runs in the separate SQLite-backed worker. It does not invoke LAS. The existing centralized LAS client is used only by explicit model actions.
@@ -86,7 +112,7 @@ A public `.csv` URL can also use the CSV adapter in Add conference. Workshops mu
 ## Resolution and review
 
 1. Prefer the PDF URL linked by the official paper page. Label it `proceedings`.
-2. When the official copy is unavailable, try the paper's supplied or previously stored identifiers before title queries. The [arXiv Atom API](https://info.arxiv.org/help/api/user-manual.html) accepts an `id_list` lookup and preserves an explicitly requested version. The [OpenAlex singleton API](https://help.openalex.org/api/get-single-entities/#external-id-lookups) accepts a DOI and supplies available open-access PDF locations. Verify returned identifiers and send conflicts to review. An exact identifier can identify a copy with a different title. Successful lookups are cached for 24 hours, and both arXiv lookup paths share the 3.1-second request spacing.
+2. When the official copy is unavailable, automatic and PDF-only jobs for WACV 2026 check the CVF main-track catalog. Next, try supplied or previously stored identifiers. The [arXiv Atom API](https://info.arxiv.org/help/api/user-manual.html) accepts an `id_list` lookup and preserves an explicitly requested version. The [OpenAlex singleton API](https://help.openalex.org/api/get-single-entities/#external-id-lookups) accepts a DOI and supplies available open-access PDF locations. Verify returned identifiers and send conflicts to review. An exact identifier can identify a copy with a different title. Successful lookups are cached for 24 hours, and both arXiv lookup paths share the 3.1-second request spacing.
 3. If identifier lookup yields no usable copy, fall back to bounded arXiv title search and, for automatic and PDF-only jobs, OpenAlex title search. Title-based acceptance still requires an **exact normalized title and complete normalized author-name multiset** plus an unambiguous match. Weak titles, initials-only overlap and conflicting versions require review. Downloads retain provider and version provenance. Conference membership comes from inventory evidence.
 4. Ambiguous candidates appear in the Review Queue with candidate title, author evidence, URL, version and reason. Confirming records review history and queues a download; rejecting records history without downloading.
 5. Optional general web search uses a pluggable `SearchProvider`. The built-in `JSONSearchProvider` calls `TUNA_SEARCH_ENDPOINT?q=...` and expects `{"results":[{"url":"https://public.example/file.pdf","title":"...","authors":["..."]}]}`. This endpoint must be public HTTP(S) with no embedded credentials or query string. It can be an organization-managed search gateway backed by a chosen provider. There is no assumed provider, no fake result data, and no scraping of Google results. General search candidates always require review.

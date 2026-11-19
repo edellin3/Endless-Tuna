@@ -2,6 +2,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   type FormEvent,
   type ReactNode,
@@ -756,6 +757,7 @@ function Conference() {
     ...blank,
     page: "1",
     page_size: "25",
+    tab: "papers",
   });
   const q = search.q,
     pdf = search.pdf,
@@ -783,6 +785,11 @@ function Conference() {
             </div>
           </div>
           <CollectionWorkflow editionId={d.id} baseline={d.coverage} initialStatus={d.status} sourceURL={d.source_url} conferenceName={d.name} conferenceYear={d.year} />
+          <div className="toolbar conference-tabs" role="navigation" aria-label="Conference views">
+            <button aria-current={search.tab !== "authors" ? "page" : undefined} onClick={() => setSearch({tab: "papers"})}>Papers</button>
+            <button aria-current={search.tab === "authors" ? "page" : undefined} onClick={() => setSearch({tab: "authors"})}>Authors & institutions</button>
+          </div>
+          {search.tab === "authors" ? <ConferenceAuthors key={`${d.id}-${new URLSearchParams(query).get("collection")}`} editionId={d.id} /> : <>
           <div className="toolbar">
             <input
               aria-label="Filter conference papers"
@@ -859,6 +866,7 @@ function Conference() {
             onSize={(n) => setSearch({ page_size: n, page: "1" })}
           />
           <ExportPanel editionId={d.id} filters={search} />
+          </>}
           <details className="panel detailed-coverage"><summary>Detailed collection coverage</summary>
           <div className="metrics coverage-metrics">
             {[
@@ -907,6 +915,107 @@ function Conference() {
       )}
     </State>
   );
+}
+function ConferenceAuthors({ editionId }: { editionId: string }) {
+  const { api, download, collection } = useApp();
+  const [dataVersion, setDataVersion] = useState(0);
+  const [filters, setFilters] = useSearchURL({author_q: "", author_status: "", page: "1", page_size: "25"});
+  const params = queryParams({q: filters.author_q, status: filters.author_status, page: filters.page, page_size: filters.page_size});
+  const result = useData(`/conferences/${editionId}/authors?${params}&revision=${dataVersion}`);
+  const diagnostics = useData(`/conferences/${editionId}/authors/extraction-status?revision=${dataVersion}`);
+  const [running, setRunning] = useState(false);
+  const [message, setMessage] = useState("");
+  const [failure, setFailure] = useState("");
+  const [useLAS, setUseLAS] = useState(false);
+  const generation = useRef(0);
+  useEffect(() => () => { generation.current++; }, [editionId, collection]);
+  async function extract(format?: "csv" | "pdf") {
+    const token = ++generation.current;
+    setRunning(true); setFailure(""); setMessage(format ? "Compiling every paper in the conference dataset…" : "Extracting downloaded papers…");
+    let after = "", count = 0, failed = 0;
+    const reasons: Record<string, number> = {};
+    try {
+      do {
+        const batch = await api(`/conferences/${editionId}/authors/extract?after=${encodeURIComponent(after)}`, {use_las: useLAS, all_papers: !!format});
+        if (generation.current !== token) return;
+        count += batch.results.length;
+        failed += batch.results.filter((r: Row) => ["failed", "no_evidence", "needs_review"].includes(r.status)).length;
+        for (const r of batch.results) if (r.code || r.error) {
+          const reason = r.message || r.error || r.code;
+          reasons[reason] = (reasons[reason] || 0) + 1;
+        }
+        setMessage(`Processed ${count} ${format ? "dataset" : "downloaded"} papers${failed ? ` · ${failed} need attention` : ""}.`);
+        after = batch.next_after || "";
+        setDataVersion(v => v + 1);
+      } while (after);
+      setMessage(`Extraction finished for ${count} ${format ? "dataset" : "downloaded"} papers${failed ? ` · ${failed} need attention` : ""}. Missing affiliations need paper review.`);
+      if (failed) setFailure(Object.entries(reasons).map(([reason, papers]) => `${papers} papers: ${reason}`).join(" "));
+      if (format) {
+        const status = await api(`/conferences/${editionId}/authors/extraction-status`);
+        if (generation.current !== token) return;
+        if (status.with_institutions > 0) await download(`/conferences/${editionId}/authors.${format}`, `conference-authors-all.${format}`);
+        else setFailure("No institution evidence was extracted, so no report was automatically downloaded. Check PDF coverage and the extraction reasons below. You can still export the author roster manually.");
+      }
+    } catch (e: any) {
+      if (generation.current === token) setFailure(e.message);
+    } finally {
+      if (generation.current === token) { setRunning(false); setDataVersion(v => v + 1); }
+    }
+  }
+  const coverage = result.data?.coverage;
+  return <section className="panel conference-authors">
+    <h2>Authors & institutions</h2>
+    <p>Authors follow the collected paper roster. Institutions come from supported paper-time evidence. Each author–paper–institution has a separate row; missing institutions stay blank in CSV.</p>
+    <p>New PDF downloads are processed automatically. Use extraction for earlier downloads. Complex layouts and image-only PDFs may need review; extracted evidence is unverified until reviewed.</p>
+    {coverage && <p>{coverage.with_institutions} of {coverage.author_paper_pairs} author–paper records have institution evidence · {coverage.papers_without_authors} papers have no author roster.</p>}
+    {diagnostics.error && <p role="alert" className="error">{diagnostics.error}</p>}
+    {diagnostics.data && <div className="info">
+      <p>{diagnostics.data.readable_papers} of {diagnostics.data.papers} dataset papers have readable PDF text · {diagnostics.data.missing_pdfs} PDFs missing · {diagnostics.data.pdfs_without_text} PDFs need text extraction or OCR.</p>
+      {diagnostics.data.missing_pdfs > 0 && <p>Inventory titles alone cannot provide institutions. Download the missing papers from the <a href={`#/conferences/${editionId}?collection=${collection}`}>conference page</a> before expecting full coverage.</p>}
+      {diagnostics.data.collection_message && <p>{diagnostics.data.collection_message}</p>}
+      {!diagnostics.data.las_ready && <p>AI unavailable: {diagnostics.data.las_message} <a href={`#/settings?collection=${collection}`}>Configure LAS</a>. Local extraction remains available for readable PDFs.</p>}
+      {diagnostics.data.issues.length > 0 && <details><summary>Stored extraction issues</summary>{diagnostics.data.issues.map((issue: Row, i: number) => <p key={i}>{issue.papers} papers: {issue.error || issue.code}</p>)}</details>}
+    </div>}
+    <div className="panel compile-authors">
+      <h3>Compile the entire conference dataset</h3>
+      <p>Extract supported institutions for every paper, then download every author and their paper-time institutions. These downloads include all records, regardless of the table search below.</p>
+      <label className="check-label"><input type="checkbox" checked={useLAS} disabled={running || !diagnostics.data?.las_ready} onChange={e => setUseLAS(e.target.checked)} />Use configured LAS AI for complex affiliations</label>
+      <p className="diagnostic-help">AI runs only when selected and you start extraction. Requires a configured model; proposed affiliations still need review. Missing PDFs, text or affiliation evidence remain flagged.</p>
+      <div className="toolbar">
+        <button disabled={running || !diagnostics.data || (!diagnostics.data.readable_papers && !diagnostics.data.with_institutions)} onClick={() => extract("csv")}>Compile all authors CSV</button>
+        <button disabled={running || !diagnostics.data || (!diagnostics.data.readable_papers && !diagnostics.data.with_institutions)} onClick={() => extract("pdf")}>Compile all authors PDF</button>
+      </div>
+    </div>
+    <div className="toolbar">
+      <button disabled={running} onClick={() => extract()}>{running ? "Extracting…" : "Extract downloaded papers"}</button>
+      {running && <button onClick={() => { generation.current++; setRunning(false); setMessage("Stopped after the current batch. Saved results are retained."); }}>Stop extraction</button>}
+      <button onClick={() => download(`/conferences/${editionId}/authors.csv?${queryParams({q: filters.author_q, status: filters.author_status})}`, "conference-authors.csv").catch(e => setFailure(e.message))}>Export matching CSV</button>
+      <button onClick={() => download(`/conferences/${editionId}/authors.csv`, "conference-authors-all.csv").catch(e => setFailure(e.message))}>Export all CSV</button>
+      <button onClick={() => download(`/conferences/${editionId}/authors.pdf?${queryParams({q: filters.author_q, status: filters.author_status})}`, "conference-authors.pdf").catch(e => setFailure(e.message))}>Export matching PDF</button>
+      <button onClick={() => download(`/conferences/${editionId}/authors.pdf`, "conference-authors-all.pdf").catch(e => setFailure(e.message))}>Export all PDF</button>
+    </div>
+    <p role="status">{message}</p>{failure && <p role="alert" className="error">{failure}</p>}
+    <div className="toolbar">
+      <label>Search authors, institutions or papers<input value={filters.author_q} maxLength={200} onChange={e => setFilters({author_q: e.target.value, page: "1"}, true)} /></label>
+      <label>Institution evidence<select value={filters.author_status} onChange={e => setFilters({author_status: e.target.value, page: "1"})}>
+        <option value="">All statuses</option><option value="missing">Missing</option><option value="extracted">Extracted (unverified)</option><option value="needs_review">Needs review</option><option value="verified">Verified</option>
+      </select></label>
+    </div>
+    <State {...result}>{result.data && <>
+      <p>{result.data.total} matching rows. CSV and PDF exports include every matching page.</p>
+      <div className="author-table-scroll"><table><caption>Conference author and institution evidence</caption><thead><tr><th>Author</th><th>Institution</th><th>Paper</th><th>Status</th><th>Evidence</th></tr></thead><tbody>
+        {result.data.items.map((row: Row, index: number) => <tr key={index}>
+          <td><a href={`#/authors/${row.author_id}?collection=${collection}`}>{row.author}</a></td>
+          <td>{row.institution || "Not extracted"}</td>
+          <td><a href={`#/papers/${row.paper_id}?collection=${collection}`}>{row.paper_title}</a></td>
+          <td>{row.status === "missing" ? "Missing institution" : <StatusBadge status={row.status} />}</td>
+          <td>{row.excerpt ? <details><summary>{row.page ? `PDF page ${row.page}` : "Source evidence"}</summary><p>{row.excerpt}</p><p>{row.method}</p><a href={row.source_url} target="_blank" rel="noreferrer">View source</a></details> : <>{`Extraction: ${row.extraction_status.replaceAll("_", " ")}`}<p>{row.extraction_error}</p></>}</td>
+        </tr>)}
+      </tbody></table></div>
+      {result.data.total === 0 && <p>No matching author records.</p>}
+    </>}</State>
+    <Pagination result={result.data} onPage={page => setFilters({page: String(page)})} onSize={page_size => setFilters({page_size, page: "1"})} />
+  </section>;
 }
 function Paper() {
   const { download, id } = useApp();
@@ -1029,8 +1138,48 @@ function Paper() {
     </State>
   );
 }
+function ConferenceAuthorSearch() {
+  const { collection } = useApp();
+  const [search, setSearch] = useSearchURL({conference_q: "", author_edition: "", conference_page: "1"});
+  const result = useData(`/author-conferences?${queryParams({q: search.conference_q, page: String(Math.max(1, Number(search.conference_page) || 1))})}`);
+  return <section aria-label="Conference author compilation">
+    <div className="panel">
+      <h2>Find authors by conference</h2>
+      <p>Enter a conference name, choose its edition, then compile a CSV or PDF of every author and institution in its stored dataset.</p>
+      <label>Search conference name or year<input className="directory-search" placeholder="e.g. NeurIPS 2026" value={search.conference_q} maxLength={200} onChange={e => setSearch({conference_q: e.target.value, author_edition: "", conference_page: "1"}, true)} /></label>
+      {search.author_edition && <button onClick={() => setSearch({author_edition: ""})}>Change conference</button>}
+      {!search.author_edition && search.conference_q.trim() && <State {...result}>
+        <div className="conference-author-matches">
+          {result.data?.items.map((conference: Row) => <div className="panel" key={conference.id}>
+            <h3>{conference.name} {conference.year}</h3>
+            <p>{conference.papers} dataset papers · {conference.author_records} author–paper records{!conference.inventory_complete && " · Inventory incomplete or unverified"}</p>
+            <button onClick={() => setSearch({author_edition: conference.id, author_q: "", author_status: "", page: "1"})}>Use {conference.name} {conference.year}</button>
+          </div>)}
+        </div>
+        {result.data?.total === 0 && <p>No indexed conference matches this name in the {collection} collection. Add and collect the conference first, or switch collections.</p>}
+        {result.data?.pages > 1 && <div className="toolbar">
+          <button disabled={result.data.page <= 1} onClick={() => setSearch({conference_page: String(result.data.page - 1)})}>Previous conferences</button>
+          <span>Page {result.data.page} of {result.data.pages}</span>
+          <button disabled={result.data.page >= result.data.pages} onClick={() => setSearch({conference_page: String(result.data.page + 1)})}>Next conferences</button>
+        </div>}
+      </State>}
+    </div>
+    {search.author_edition && <SelectedAuthorConference key={`${collection}-${search.author_edition}`} editionId={search.author_edition} />}
+  </section>;
+}
+
+function SelectedAuthorConference({editionId}: {editionId: string}) {
+  const result = useData(`/conferences/${encodeURIComponent(editionId)}?include_papers=false`);
+  return <State {...result}>{result.data && <>
+    <h2>{result.data.name} {result.data.year}</h2>
+    <p>{result.data.coverage.inventory_records} stored papers · {result.data.coverage.pdfs} PDFs available{!result.data.coverage.inventory_complete && " · Inventory incomplete or unverified"}. Compilation covers this stored dataset.</p>
+    <ConferenceAuthors editionId={editionId} />
+  </>}</State>;
+}
+
 function Authors() {
-  const { id } = useApp();
+  const { id, query } = useApp();
+  const conferenceSelected = !id && !!new URLSearchParams(query).get("author_edition");
   const [search, setSearch] = useSearchURL({
     q: "",
     organization: "",
@@ -1060,7 +1209,8 @@ function Authors() {
           <p>Paper-time affiliations, with evidence you can inspect.</p>
         </div>
       </div>
-      {!id && (
+      {!id && <ConferenceAuthorSearch />}
+      {!id && !conferenceSelected && (
         <div className="toolbar author-filters">
           <input
             aria-label="Search authors"
@@ -1100,7 +1250,7 @@ function Authors() {
           </select>
         </div>
       )}
-      <State data={data} error={error}>
+      {!conferenceSelected && <State data={data} error={error}>
         {id ? (
           data && <AuthorEvidenceDetail author={data} />
         ) : (
@@ -1141,7 +1291,7 @@ function Authors() {
             )}
           </div>
         )}
-      </State>
+      </State>}
       <p className="collection-note">
         Names and original author order are preserved. Organization location
         does not establish nationality or residence.
@@ -2088,9 +2238,9 @@ function CollectionWorkflow({ editionId, baseline, initialStatus, sourceURL, con
     } catch(e) { setNotice((e as Error).message); }
     finally { setBusy(false); }
   }
-  async function run(kind: "inventory" | "pdfs") {
+  async function run(kind: "inventory" | "pdfs", publicAlternatives = false) {
     setBusy(true);
-    try { await api(`/conferences/${editionId}/${kind === "pdfs" ? "pdfs" : "collect"}`, {mode:kind,full_collection:all,paper_limit:10});refresh(); }
+    try { await api(`/conferences/${editionId}/${kind === "pdfs" ? "pdfs" : "collect"}`, {mode:kind,full_collection:all,paper_limit:10,...(kind === "pdfs" ? {public_alternatives: publicAlternatives} : {})});refresh(); }
     catch(e) {setNotice((e as Error).message);} finally {setBusy(false);}
   }
   const activeJob = data?.jobs.find((j: Row) => ["queued", "running"].includes(j.status));
@@ -2115,7 +2265,8 @@ function CollectionWorkflow({ editionId, baseline, initialStatus, sourceURL, con
     <details className="collection-tools"><summary>Collection details & tools</summary>
       <p>{latest?.message || "No collection has run yet."}</p><p>{c?.ocr_required ?? 0} PDFs need OCR to become searchable. <a href="#/jobs">View background history</a></p>
       <label className="scope-check"><input type="checkbox" checked={all} onChange={e => setAll(e.target.checked)} /> Process all remaining papers instead of the next 10</label>
-      <div className="toolbar"><button disabled={busy || !!activeJob || !c?.missing_pdfs} onClick={() => run("pdfs")}>Find free PDFs · next 10</button><button disabled={busy || !!activeJob} onClick={() => run("inventory")}>Refresh paper list</button></div>
+      <div className="toolbar"><button disabled={busy || !!activeJob || !c?.missing_pdfs} onClick={() => run("pdfs")}>Find free PDFs · {all ? "all remaining" : "next 10"}</button><button disabled={busy || !!activeJob || !c?.missing_pdfs} onClick={() => run("pdfs", true)}>Find public copies elsewhere · {all ? "all remaining" : "next 10"}</button><button disabled={busy || !!activeJob} onClick={() => run("inventory")}>Refresh paper list</button></div>
+      <p>Public-copy retrieval skips OpenReview and continues through supported free sources. Paper titles and complete author lists must match; uncertain copies go to review.</p>
     </details>
   </section>;
 }
