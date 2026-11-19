@@ -123,13 +123,13 @@ def process_paper(collection,job,token,item,adapter):
                     paper_stage(collection,jid,token,pid,'extract')
                     parsed_pages=parse_pdf_pages(raw)
                 except CollectionError as direct_error:
-                    # A broken proceedings link can still resolve to a distinct arXiv version.
-                    if selected.version!='proceedings' and not selected.version.startswith('openreview:'):raise
+                    # Give official and bibliographic copies one attempt at a distinct alternate.
+                    if selected.version!='proceedings' and not selected.version.startswith(('openreview:','arxiv:','openalex:')):raise
                     fallback=record.model_copy(update={'pdf_url':None})
-                    selected,candidates,error=resolve(fallback,collection,fetch,wide=job["kind"] in ("pdfs","automatic"))
+                    selected,candidates,error=resolve(fallback,collection,fetch,excluded_urls=(selected.url,))
                     with storage.connect(collection) as con:
                         owned(con,jid,token)
-                        for candidate in candidates:save_candidate(con,pid,candidate,error or 'Proceedings PDF unavailable; fallback requires review')
+                        for candidate in candidates:save_candidate(con,pid,candidate,error or 'PDF unavailable; fallback requires review')
                     if not selected:
                         with storage.connect(collection) as con:
                             owned(con,jid,token)

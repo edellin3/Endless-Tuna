@@ -4,6 +4,7 @@ import json
 import hashlib
 import time
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -93,6 +94,110 @@ def test_ambiguous_arxiv_versions_are_not_auto_accepted(session):
     # The cached resolution avoids another API request.
     selected,_,_=resolve(record,'real',lambda *a,**k:pytest.fail('Cache should prevent another request'))
     assert selected is None
+
+
+def test_arxiv_identifier_uses_atom_id_lookup_before_title_search(session):
+    record = Metadata(title='Revised proceedings title', authors=[Person(name='Mira Chen')],
+                      identifiers={'arxiv': 'https://arxiv.org/abs/2401.99999v2'})
+    raw = (FIXTURES / 'arxiv.xml').read_bytes().replace(b'0000.00000', b'2401.99999')
+    calls = []
+
+    def fetch(url, **kwargs):
+        calls.append(parse_qs(urlsplit(url).query))
+        return raw, url
+
+    for _ in range(2):
+        selected, candidates, reason = resolve(record, 'real', fetch)
+        assert selected.version == 'arxiv:2401.99999v2'
+        assert not candidates and reason is None
+    assert calls == [{'id_list': ['2401.99999v2'], 'max_results': ['5']}]
+
+
+@pytest.mark.parametrize('returned_id,pdf_id', [
+    ('2401.99999v3', '2401.99999v3'),
+    ('2401.99999v2', '2401.99998v2'),
+])
+def test_arxiv_identifier_or_pdf_version_conflicts_require_review(session, returned_id, pdf_id):
+    record = Metadata(title='Fixture optimization for robots', identifiers={'arxiv': '2401.99999v2'})
+    raw = (FIXTURES / 'arxiv.xml').read_text()
+    raw = raw.replace('/abs/0000.00000v2', f'/abs/{returned_id}').replace('/pdf/0000.00000v2', f'/pdf/{pdf_id}')
+    selected, candidates, reason = resolve(record, 'real', lambda url, **kwargs: (raw.encode(), url))
+    assert selected is None and len(candidates) == 1
+    assert 'Conflicting arxiv identifier' in reason
+
+
+def test_title_fallback_respects_known_arxiv_version(session, monkeypatch):
+    record = Metadata(title='Fixture optimization for robots',
+                      authors=[Person(name='Mira Chen'), Person(name='Alex Rivera')],
+                      identifiers={'arxiv': '2401.99999v1'})
+    monkeypatch.setattr('endless_tuna.resolution.time.sleep', lambda _: None)
+
+    def fetch(url, **kwargs):
+        if 'id_list=' in url:
+            return b'<feed xmlns="http://www.w3.org/2005/Atom"/>', url
+        return (FIXTURES / 'arxiv.xml').read_bytes().replace(b'0000.00000', b'2401.99999'), url
+
+    selected, candidates, reason = resolve(record, 'real', fetch)
+    assert selected is None and candidates[0].version == 'arxiv:2401.99999v2'
+    assert 'conflicts with the stored arXiv identifier' in reason
+
+
+def test_pdf_job_uses_stored_doi_without_prior_job_metadata(session, monkeypatch):
+    from endless_tuna.pipeline_store import upsert_paper
+    from tests.acceptance_fixture import fixture_pdf
+
+    created = create(session)
+    edition = created['id']
+    headers = {'X-Collection': 'real'}
+    assert session.post(f"/api/jobs/{created['job_id']}/cancel", headers=headers).status_code == 200
+    record = Metadata(title='Fictional conference title', source_url='https://example.org/paper',
+                      authors=[Person(name='Fixture Author')], identifiers={'doi': 'https://doi.org/10.5555/Paper'})
+    with db.connect('real') as con:
+        track = con.execute('SELECT id FROM tracks WHERE edition_id=?', (edition,)).fetchone()['id']
+        paper = upsert_paper(con, edition, track, record, 'https://example.org/inventory')
+
+    pdf_url = 'https://repository.example/paper.pdf'
+    doi_url = 'https://api.openalex.org/works/doi:10.5555/paper'
+    calls = []
+
+    def fetch(url, **kwargs):
+        calls.append(url)
+        if url.startswith(doi_url + '?'):
+            return json.dumps({
+                'id': 'https://openalex.org/W123', 'doi': 'https://doi.org/10.5555/paper',
+                'title': 'Fictional repository title', 'authorships': [{'raw_author_name': 'Fixture Author'}],
+                'locations': [{'is_oa': True, 'pdf_url': pdf_url, 'version': 'acceptedVersion'}],
+            }).encode(), url
+        if url == pdf_url:
+            return fixture_pdf(), url
+        pytest.fail(f'Unexpected lookup: {url}')
+
+    monkeypatch.setattr('endless_tuna.worker.fetch_bytes', fetch)
+    queued = session.post(f'/api/conferences/{edition}/pdfs', headers=headers, json={})
+    assert queued.status_code == 200
+    assert tick('real', queued.json()['job_id'])
+    detail = session.get(f'/api/papers/{paper}', headers=headers).json()
+    assert len(calls) == 2 and calls[0].startswith(doi_url + '?') and calls[1] == pdf_url
+    assert detail['title'] == record.title
+    assert detail['downloads'][0]['version'] == 'openalex:W123:acceptedVersion'
+    assert detail['downloads'][0]['parse_status'] == 'indexed'
+
+
+def test_openalex_doi_conflict_requires_review(session):
+    record = Metadata(title='Fictional paper', identifiers={'doi': '10.5555/expected'})
+    pdf_url = 'https://repository.example/paper.pdf'
+
+    def fetch(url, **kwargs):
+        assert '/works/doi:10.5555/expected?' in url
+        return json.dumps({
+            'id': 'https://openalex.org/W123', 'doi': 'https://doi.org/10.5555/different',
+            'title': record.title, 'authorships': [],
+            'locations': [{'is_oa': True, 'pdf_url': pdf_url}],
+        }).encode(), url
+
+    selected, candidates, reason = resolve(record, 'real', fetch)
+    assert selected is None and candidates[0].url == pdf_url
+    assert 'Conflicting doi identifier' in reason
 
 
 @pytest.mark.parametrize('raw',[b'<html>Not a PDF</html>',b'%PDF-1.4\ninvalid truncated PDF'])

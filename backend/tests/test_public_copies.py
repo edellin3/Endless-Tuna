@@ -1,4 +1,6 @@
 import json
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 from endless_tuna import db,worker
@@ -24,9 +26,32 @@ def record():return Metadata(title='Fictional study',authors=[Person(name='Mira 
 def test_cvf_uses_exact_title_and_complete_authors_and_cached_catalog(client):
     calls=[]
     def fetch(url,**kwargs):calls.append(url);assert url==SOURCE;return CATALOG,url
-    selected,_,_=resolve(record(),'real',fetch,wide=True)
+    paper = record().model_copy(update={'identifiers': {'arxiv': '2401.99999v2'}})
+    selected,_,_=resolve(paper,'real',fetch,wide=True)
     assert selected.url==PDF and selected.version=='cvf:WACV2026'
     assert cvf_candidates(record(),'real',fetch)[0].url==PDF and calls==[SOURCE]
+
+
+def test_wacv_without_cvf_match_looks_up_identifier_before_title(client):
+    paper = record().model_copy(update={
+        'title': 'Fictional paper absent from CVF',
+        'identifiers': {'arxiv': '2401.99999v2'},
+    })
+    atom = (Path(__file__).parent / 'fixtures' / 'arxiv.xml').read_bytes().replace(b'0000.00000', b'2401.99999')
+    calls = []
+
+    def fetch(url, **kwargs):
+        calls.append(url)
+        if url == SOURCE:
+            return CATALOG, url
+        assert url.startswith('https://export.arxiv.org/api/query?id_list=2401.99999v2&')
+        return atom, url
+
+    selected, candidates, error = resolve(paper, 'real', fetch, wide=True)
+    assert selected.version == 'arxiv:2401.99999v2'
+    assert not candidates and error is None
+    assert len(calls) == 2 and calls[0] == SOURCE
+
 
 def test_cvf_incomplete_authors_require_review_and_cannot_select_supplement(client):
     r=record().model_copy(update={'authors':[Person(name='Mira Chen')]})
